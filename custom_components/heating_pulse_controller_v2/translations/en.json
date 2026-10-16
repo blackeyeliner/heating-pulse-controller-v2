@@ -1,0 +1,98 @@
+{
+  "title": "Heating Pulse Controller v2",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Radiator pulse controller",
+        "description": "Select the existing room thermostat and calibrated Sonoff limit entities. Configuration does not move the valve. Select all legacy valve writers so they cannot run alongside this controller.",
+        "data": {
+          "name": "Room name",
+          "thermostat": "Room thermostat (setpoint and mode)",
+          "trv": "Physical Sonoff TRV",
+          "room_sensor": "Room temperature sensor",
+          "radiator_sensor": "Radiator surface temperature sensor",
+          "opening_entity": "Sonoff opening-limit number",
+          "closing_entity": "Sonoff closing-limit number",
+          "opening_value": "Calibrated opening limit (%)",
+          "closing_value": "Calibrated closing limit (%)",
+          "output_helper": "Existing logical valve-position helper (optional)",
+          "legacy_automations": "Legacy control automations that must stay off"
+        }
+      },
+      "tuning": {
+        "title": "Control parameters",
+        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload.",
+        "data": {
+          "reference_seconds": "Reference lifetime (seconds)",
+          "cooling_fraction": "Remaining temperature excess before restart (fraction)",
+          "start_error": "Start heating below setpoint by (°C)",
+          "stop_error": "Stop heating below setpoint by (°C)",
+          "bootstrap_lag": "Initial residual warming delay (seconds)",
+          "max_lag": "Maximum accepted residual delay (seconds)",
+          "trend_window": "Temperature trend window (seconds)",
+          "plateau_seconds": "Plateau confirmation duration (seconds)",
+          "plateau_slope": "Maximum plateau slope (°C/min)",
+          "plateau_ratio": "Maximum plateau/rising slope ratio",
+          "fall_tolerance": "Allowed negative slope from noise (°C/min)",
+          "min_rise": "Required surface warming before plateau detection (°C)",
+          "min_rising_slope": "Required rising slope (°C/min)",
+          "max_sample_gap": "Maximum gap within a usable curve (seconds)",
+          "radiator_timeout": "Radiator data timeout (seconds)",
+          "room_timeout": "Room data timeout (seconds)",
+          "max_open_seconds": "Maximum valve-open time (seconds)",
+          "peak_drop": "Cooling needed to confirm a peak (°C)",
+          "peak_confirm_seconds": "Minimum peak confirmation interval (seconds)",
+          "startup_excess": "Maximum surface excess for starting after restart (°C)",
+          "reporting_verified": "I verified that fresh temperature reports arrive even at constant temperature"
+        }
+      }
+    },
+    "error": {
+      "distinct_entities": "Select separate entities for each role.",
+      "entity_unavailable": "A selected entity is missing or unavailable.",
+      "invalid_temperature": "A sensor does not report a finite temperature.",
+      "celsius_required": "Both sensors must report degrees Celsius.",
+      "unsupported_climate": "Both thermostats must support heat and off.",
+      "unsupported_limits": "Limit entities must support the full 0–100 range.",
+      "inverted_limits": "The minimum position (100 minus closing limit) must not exceed the opening limit.",
+      "invalid_settings": "Check positive values, fractions between 0 and 1, hysteresis, delay bounds, sample gap and maximum heating duration."
+    },
+    "abort": {
+      "already_configured": "An existing controller already owns this actuator."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Control parameters",
+        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload.",
+        "data": {
+          "reference_seconds": "Reference lifetime (seconds)",
+          "cooling_fraction": "Remaining temperature excess before restart (fraction)",
+          "start_error": "Start heating below setpoint by (°C)",
+          "stop_error": "Stop heating below setpoint by (°C)",
+          "bootstrap_lag": "Initial residual warming delay (seconds)",
+          "max_lag": "Maximum accepted residual delay (seconds)",
+          "trend_window": "Temperature trend window (seconds)",
+          "plateau_seconds": "Plateau confirmation duration (seconds)",
+          "plateau_slope": "Maximum plateau slope (°C/min)",
+          "plateau_ratio": "Maximum plateau/rising slope ratio",
+          "fall_tolerance": "Allowed negative slope from noise (°C/min)",
+          "min_rise": "Required surface warming before plateau detection (°C)",
+          "min_rising_slope": "Required rising slope (°C/min)",
+          "max_sample_gap": "Maximum gap within a usable curve (seconds)",
+          "radiator_timeout": "Radiator data timeout (seconds)",
+          "room_timeout": "Room data timeout (seconds)",
+          "max_open_seconds": "Maximum valve-open time (seconds)",
+          "peak_drop": "Cooling needed to confirm a peak (°C)",
+          "peak_confirm_seconds": "Minimum peak confirmation interval (seconds)",
+          "startup_excess": "Maximum surface excess for starting after restart (°C)",
+          "reporting_verified": "I verified that fresh temperature reports arrive even at constant temperature"
+        }
+      }
+    },
+    "error": {
+      "invalid_settings": "Check positive values, fractions between 0 and 1, hysteresis, delay bounds, sample gap and maximum heating duration."
+    }
+  }
+}

@@ -1,0 +1,22 @@
+[project]
+name = "heating-pulse-controller-v2"
+version = "0.1.0b1"
+description = "Adaptive radiator pulse controller for Home Assistant"
+requires-python = ">=3.14.2,<3.15"
+dependencies = []
+
+[dependency-groups]
+dev = ["homeassistant==2026.9.3", "pytest>=9,<10", "pytest-asyncio>=1,<2", "pytest-cov>=7,<8", "ruff>=0.17,<0.18"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = ["E501"]

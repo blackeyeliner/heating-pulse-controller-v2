@@ -1,0 +1,16 @@
+"""Integration constants and configuration keys."""
+
+DOMAIN = "heating_pulse_controller_v2"
+NAME = "Heating Pulse Controller v2"
+CONF_ROOM = "room_sensor"
+CONF_RADIATOR = "radiator_sensor"
+CONF_THERMOSTAT = "thermostat"
+CONF_TRV = "trv"
+CONF_OPENING = "opening_entity"
+CONF_CLOSING = "closing_entity"
+CONF_OPEN_VALUE = "opening_value"
+CONF_CLOSE_VALUE = "closing_value"
+CONF_OUTPUT = "output_helper"
+CONF_GUARDS = "legacy_automations"
+CONF_REPORTS = "reporting_verified"
+PLATFORMS = ["sensor", "switch", "button"]
