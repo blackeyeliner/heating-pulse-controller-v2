@@ -113,8 +113,15 @@ class Runtime:
         state = event.data.get("new_state")
         old = event.data.get("old_state")
         if entity_id in self._sensor_ids:
-            # Attribute-only writes do not add a new temperature sample.
-            if old is None or state is None or old.state != state.state:
+            # MQTT force_update emits state_changed for an identical value and
+            # identical attributes, rather than state_reported. Count it once.
+            # Attribute-only writes still do not add a temperature sample.
+            if (
+                old is None
+                or state is None
+                or old.state != state.state
+                or old.attributes == state.attributes
+            ):
                 self._temperature(entity_id, state)
         self._schedule()
 

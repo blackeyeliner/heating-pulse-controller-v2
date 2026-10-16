@@ -72,6 +72,21 @@ async def test_attribute_only_change_is_not_temperature_report(hass, entry, devi
     await r.stop()
 
 
+async def test_mqtt_forced_equal_state_counts_as_fresh_temperature(hass, entry, devices):
+    r = Runtime(hass, entry)
+    await r.start()
+    await fresh(hass)
+    before = r.engine.radiator
+    state = hass.states.get("sensor.radiator")
+    hass.states.async_set("sensor.radiator", state.state, state.attributes, force_update=True)
+    await hass.async_block_till_done()
+    assert r.engine.radiator is not before
+    assert r.engine.radiator.value == before.value
+    assert r.engine.radiator.at > before.at
+    assert devices == []
+    await r.stop()
+
+
 async def test_disable_during_open_sequence_wins(hass, entry, devices):
     r = Runtime(hass, entry)
     await r.start()

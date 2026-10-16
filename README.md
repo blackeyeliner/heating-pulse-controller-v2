@@ -2,7 +2,7 @@
 
 Adaptive radiator pulse control as a Home Assistant custom Python integration. It uses a room sensor, a radiator-surface sensor, and a fixed, mechanically reliable Sonoff TRV opening. The room's existing thermostat supplies the requested temperature and heat/off mode.
 
-**Status:** `0.1.0b1`, implemented and locally tested against Home Assistant **2026.9.3 / Python 3.14**. Not installed in production. Available as a HACS custom repository, with a separate ZIP for manual installation. This is an initial pilot, not a commissioned heating system.
+**Status:** `0.1.0b2`, implemented and locally tested against Home Assistant **2026.9.3 / Python 3.14**. Not installed in production. Available as a HACS custom repository, with a separate ZIP for manual installation. This is an initial pilot, not a commissioned heating system.
 
 ## Control behaviour
 
@@ -45,9 +45,19 @@ A successful service call confirms delivery through HA, not physical stem positi
 
 ## Sensors and tuning
 
-Both temperature sensors must report Celsius. Fresh reports must arrive within the configured timeouts, including when temperature stays constant. The adapter subscribes to both changed states and unchanged `state_reported` events. Attribute-only changes do not create temperature samples, and the initial state snapshot after setup does not count as a fresh report.
+Both temperature sensors must report Celsius. Fresh reports must arrive within the configured timeouts, including when temperature stays constant. The adapter subscribes to changed states, unchanged `state_reported` events, and identical forced state updates. Attribute-only changes do not create temperature samples, and the initial state snapshot after setup does not count as a fresh report.
 
 **Verify this with the actual sensor/integration.** A cached MQTT payload republished for an unrelated attribute is not necessarily a new physical temperature measurement. The setup checkbox records that verification; it does not perform it. Recorder history omits some unchanged reports and cannot establish this by itself.
+
+For MQTT sensors, Home Assistant may suppress identical values before creating any state event. Enable `force_update: true` on the temperature entities used by this controller. With Zigbee2MQTT, the device-specific discovery override is:
+
+```yaml
+homeassistant:
+  temperature:
+    force_update: true
+```
+
+This affects HA event/history recording, not the sensor's Zigbee reporting interval. Confirm the actual reporting interval separately. Version `0.1.0b2` handles the resulting forced `state_changed` events; `0.1.0b1` does not. Freshness and plateau detection cannot work from equal measurements that HA discards. See [MQTT sensor configuration](https://www.home-assistant.io/integrations/sensor.mqtt/#force_update) and [Zigbee2MQTT discovery overrides](https://www.zigbee2mqtt.io/guide/usage/integrations/home_assistant.html#overriding-discovery-properties).
 
 Defaults are provisional commissioning values:
 
