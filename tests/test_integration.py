@@ -6,7 +6,13 @@ from types import MappingProxyType
 
 import pytest
 from homeassistant.bootstrap import async_load_base_functionality
+from homeassistant.components.logbook.helpers import (
+    _is_state_filtered,
+    async_filter_entities,
+    is_sensor_continuous,
+)
 from homeassistant.config_entries import ConfigEntries, ConfigEntry, ConfigEntryState
+from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 
 from custom_components.heating_pulse_controller_v2.const import DOMAIN
@@ -54,7 +60,9 @@ async def test_real_setup_entities_reload_unload(hass, config, devices):
     age = hass.states.get(age_id)
     assert age.state == "unknown"
     assert age.attributes["seconds"] is None
-    assert "unit_of_measurement" not in age.attributes
+    assert age.attributes["formatted"] is None
+    assert age.attributes["unit_of_measurement"] == "min"
+    assert age.attributes["device_class"] == "duration"
     runtime.now = lambda: 12000
     for seconds, expected in [
         (0, "00:00"),
@@ -63,11 +71,17 @@ async def test_real_setup_entities_reload_unload(hass, config, devices):
         (754, "12:34"),
         (10800, "180:00"),
     ]:
+        old_age = age
         runtime.engine.reference = Reference(40, 12000 - seconds, 0, [])
         runtime._notify()
         await hass.async_block_till_done()
         age = hass.states.get(age_id)
-        assert age.state == expected
+        assert float(age.state) == pytest.approx(round(seconds / 60, 2))
+        assert age.attributes["formatted"] == expected
+        # Exercise HA's actual historical classification and live Activity filters.
+        assert is_sensor_continuous(hass, er.async_get(hass), age_id)
+        assert async_filter_entities(hass, [age_id]) == []
+        assert _is_state_filtered(age, old_age)
         assert age.attributes["seconds"] == pytest.approx(seconds)
     runtime.engine.reference = None
     assert await hass.config_entries.async_reload(entry.entry_id)

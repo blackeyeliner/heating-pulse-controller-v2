@@ -1,6 +1,6 @@
-# Beta 4: adaptive cooling and readable reference age
+# Adaptive cooling and Reference age (beta 4–5)
 
-Implemented on 2026-10-16 for beta 4, following the first baseline calibration and ordinary pulse on beta 3. Adaptive hardware commissioning remains pending. Adaptive cooling is experimental and defaults to off, including for existing config entries.
+Implemented on 2026-10-16 for beta 4, following the first baseline calibration and ordinary pulse on beta 3. Adaptive hardware commissioning began on 2026-10-16; calibration, ordinary cycles, lower-plateau replacement and scheduled recalibration have been observed in the office pilot. Comfort tuning and consumption assessment remain ongoing. Adaptive cooling is experimental and defaults to off, including for existing config entries.
 
 ## Adaptive cooling
 
@@ -31,14 +31,44 @@ The `Restart temperature` sensor exposes the selected fraction as the `cooling_f
 
 ## Reference age
 
-The existing Reference age entity and unique ID are retained. Its state becomes a text duration, `MM:SS`, with total minutes (for example `12:34` or `180:00`), floored to whole seconds. It has no numeric unit or state class. Before calibration the state remains unknown.
+Beta 5 retains the existing entity and unique ID but exposes a numeric duration in **minutes**, with `device_class: duration` and suggested display precision 2. The `formatted` attribute holds total minutes/seconds (`12:34`, `180:00`), floored to whole seconds. The `seconds` attribute and controller diagnostics retain raw numeric seconds. Before calibration, state and both attributes are unknown/None. Internal three-hour expiry remains in seconds; this is only a diagnostic representation change.
 
-The numeric age remains in the entity's `seconds` attribute and in downloaded controller diagnostics. Automations that previously parsed the entity state as a number must instead use `state_attr('sensor.…_reference_age', 'seconds')`. No additional entity or dashboard modification is needed. Internal three-hour expiry remains in seconds. Display updates follow the existing runtime update cadence, normally five seconds, not a new per-second timer.
+Beta 4 used a plain MM:SS text state, causing Activity to treat every timer tick as an event. Numeric duration makes Home Assistant filter the sensor from historical and live Activity, including explicitly selected device/entity views. Any consumer parsing the beta 4 state as MM:SS must use `formatted`; numeric calculations should use `seconds` or account for the state now being minutes. Updates retain the existing runtime cadence.
+
+### Activity / Logbook filtering
+
+The beta 4 text state caused timer spam. The initial workaround below suppressed the general feed only and is insufficient on its own for explicitly selected Activity views. Beta 5 numeric duration resolves that classification issue; the host filter can remain but is not required for numeric duration:
+
+```yaml
+logbook:
+  exclude:
+    entities:
+      - sensor.your_room_reference_age
+```
+
+Merge this into an existing `logbook` section rather than creating duplicate YAML keys. This host configuration requires an HA restart; reloading the pulse integration alone does not apply it. The filter affects the general Activity feed, not stored Recorder history or the live value. An explicitly entity-filtered Logbook query can still return this sensor's entries; verify the general feed when checking this exclusion. No numeric device/state class is assigned to the MM:SS text as a workaround.
+
+### Recorder exclusion for the timer
+
+On 2026-10-17 the user confirmed that Reference age history is unnecessary. To stop persisting new timer ticks, add the same entity to `recorder.exclude.entities` as well as Logbook exclusion. Live state and algorithm remain available; existing history is not purged. Recorder exclusion alone does not suppress an explicitly selected live Activity stream for a text sensor. Beta 5 numeric duration supplies that missing live filter. Verify historical queries and live streaming separately.
+
+```yaml
+recorder:
+  exclude:
+    entities:
+      - sensor.your_room_reference_age
+```
 
 ## Validation and later rollout
 
-Local verification on 2026-10-16: all 66 tests passed against HA 2026.9.3 with simulated device services; Ruff lint/format and git whitespace checks passed. Five warnings originate in HA/dependency deprecations. No live actuator commands or deployment were performed.
+Local verification on 2026-10-16: all 66 tests passed against HA 2026.9.3 with simulated device services; Ruff lint/format and git whitespace checks passed. Five warnings originate in HA/dependency deprecations. Those local checks did not issue live actuator commands; hardware commissioning followed separately.
 
 Tests cover earlier reopening with outstanding demand, peak-confirmation gating, room progress/deficit weighting, sparse/stale trend fallback, a frozen episode threshold, satisfied-demand blocking, the gap below the closing threshold, legacy calibration restore and option validation. Real HA platform tests check unknown age, minute/hour boundaries, numeric attributes, options reload and unchanged entity count.
 
-The baseline pilot verified calibration, a roughly six-minute ordinary pulse, automatic threshold closure and post-close lag learning. Control was turned off before beta 4 publication. Update and restart HA, enable adaptive cooling through Configure, wait for fresh temperature reports, then explicitly re-enable control for supervised commissioning. Expect the cold-start cooling gate before a new calibration; adaptation first selects a threshold at post-close peak confirmation. No reduction in water consumption is claimed from these tests.
+The baseline pilot verified calibration, a roughly six-minute ordinary pulse, automatic threshold closure and post-close lag learning. Control was turned off before beta 4 publication. The office was subsequently updated/restarted, adaptive cooling enabled through Configure, and control explicitly enabled after fresh reports. The cold-start cooling gate preceded calibration; adaptation selected its first threshold at post-close peak confirmation. For future installations, follow the same setup sequence. No reduction in water consumption is claimed from these tests.
+
+## Known diagnostic issue after restart
+
+`Last decision` initially reads `not_enabled`. Enabling control while the radiator is still above its startup cooling gate changes the phase to cooling but leaves this reason text unchanged until the next heat/open/close decision. It does not indicate the live control switch is off. Inspect Control enabled and Phase for current status. A future diagnostic change should distinguish the current waiting condition from the last action reason; no controller behaviour change is implemented for this issue yet.
+
+Calibration and lag survive restart; the interrupted cooling episode does not. Startup uses room temperature plus `startup_excess` (default 3 °C), not the prior adaptive restart gate. Control remains explicitly disabled until fresh reports and an enable action after every restart/reload.

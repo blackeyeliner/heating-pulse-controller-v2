@@ -2,7 +2,7 @@
 
 Adaptive radiator pulse control as a Home Assistant custom Python integration. It uses a room sensor, a radiator-surface sensor, and a fixed, mechanically reliable Sonoff TRV opening. The room's existing thermostat supplies the requested temperature and heat/off mode.
 
-**Status:** `0.1.0b4`, implemented and locally tested against Home Assistant **2026.9.3 / Python 3.14**. Beta 3 completed initial hardware calibration and one ordinary pulse; beta 4 adaptive cooling still requires hardware commissioning. Available as a HACS custom repository, with a separate ZIP for manual installation. This is an initial pilot, not a commissioned heating system.
+**Status:** `0.1.0b5`, tested against Home Assistant **2026.9.3 / Python 3.14**. Beta 4 adaptive calibration and ordinary cycles have been observed in the office pilot. Beta 5 corrects Reference age Activity spam without changing the heating algorithm. Available as a HACS custom repository, with a separate ZIP for manual installation. Long-term comfort and consumption assessment remain ongoing.
 
 ## Control behaviour
 
@@ -47,7 +47,7 @@ A successful service call confirms delivery through HA, not physical stem positi
 
 ## Sensors and tuning
 
-**New in beta 4:** optional adaptive cooling and Reference age in `MM:SS`; see [design and migration notes](docs/next-stage.md). Adaptation defaults to off. Enable it through Configure after updating; changing algorithm settings invalidates calibration and disables control until explicitly re-enabled.
+**New in beta 5:** Reference age is a numeric duration in minutes, with total `MM:SS` retained in its `formatted` attribute and numeric seconds in `seconds`. This prevents timer ticks from appearing in both historical and live Activity. Beta 4 introduced optional adaptive cooling; see [design and migration notes](docs/next-stage.md). Adaptation defaults to off. Enable it through Configure after updating; changing algorithm settings invalidates calibration and disables control until explicitly re-enabled.
 
 Both temperature sensors must report Celsius. Fresh reports must arrive within the configured timeouts, including when temperature stays constant. The adapter subscribes to changed states, unchanged `state_reported` events, and identical forced state updates. Attribute-only changes do not create temperature samples, and the initial state snapshot after setup does not count as a fresh report.
 
