@@ -27,6 +27,11 @@ class Settings:
 
     reference_seconds: float = 10800
     cooling_fraction: float = 0.3
+    adaptive_cooling: bool = False
+    cooling_fraction_max: float = 0.6
+    cooling_full_error: float = 1.0
+    room_trend_window: float = 300
+    cooling_min_gap: float = 0.5
     start_error: float = 0.25
     stop_error: float = 0.1
     bootstrap_lag: float = 120
@@ -49,12 +54,21 @@ class Settings:
     def __post_init__(self):
         for field in fields(self):
             value = getattr(self, field.name)
+            if field.name == "adaptive_cooling":
+                if not isinstance(value, bool):
+                    raise ValueError(field.name)
+                continue
             if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
                 raise ValueError(field.name)
         if not 0 < self.cooling_fraction < 1 or not 0 < self.plateau_ratio < 1:
             raise ValueError("fractions")
         if self.stop_error >= self.start_error:
             raise ValueError("hysteresis")
+        if self.adaptive_cooling and (
+            not self.cooling_fraction <= self.cooling_fraction_max < 1
+            or self.cooling_full_error <= self.start_error
+        ):
+            raise ValueError("adaptive_cooling_bounds")
         if self.bootstrap_lag > self.max_lag:
             raise ValueError("lag")
         if self.max_sample_gap > self.radiator_timeout:
@@ -123,6 +137,8 @@ class Controller:
         self.opened_at: float | None = None
         self.closed_at: float | None = None
         self._trace: deque[Sample] = deque(maxlen=2048)
+        self._room_trace: deque[Sample] = deque(maxlen=2048)
+        self.cooling_fraction_used: float | None = None
         self._candidate: list[Sample] = []
         self._max_slope = 0.0
         self._last_evaluated_report = -math.inf
@@ -141,7 +157,40 @@ class Controller:
         return median(self.lags) if self.lags else self.settings.bootstrap_lag
 
     def room_report(self, value: float, at: float):
+        previous = self.room
         self.room = self._sample(value, at, self.room)
+        if self.room is None:
+            self._room_trace.clear()
+        elif self.room is not previous:
+            if previous and at - previous.at > self.settings.max_sample_gap:
+                self._room_trace.clear()
+            self._room_trace.append(self.room)
+            while (
+                self._room_trace and self._room_trace[0].at < at - self.settings.room_trend_window
+            ):
+                self._room_trace.popleft()
+
+    def room_trend(self, now: float) -> float | None:
+        samples = list(self._room_trace)
+        if (
+            not samples
+            or now - samples[-1].at > self.settings.max_sample_gap
+            or samples[-1].at - samples[0].at < self.settings.room_trend_window * 0.5
+        ):
+            return None
+        return slope(samples)
+
+    def _cooling_fraction(self, now: float, target: float | None) -> float:
+        cfg = self.settings
+        trend = self.room_trend(now)
+        if not cfg.adaptive_cooling or target is None or trend is None:
+            return cfg.cooling_fraction
+        # A short projection credits observed warming, never invents future cooling.
+        deficit = target - self.room.value - max(0, trend) * cfg.room_trend_window / 60
+        weight = min(
+            1, max(0, (deficit - cfg.start_error) / (cfg.cooling_full_error - cfg.start_error))
+        )
+        return cfg.cooling_fraction + weight * (cfg.cooling_fraction_max - cfg.cooling_fraction)
 
     def radiator_report(self, value: float, at: float):
         previous = self.radiator
@@ -224,7 +273,7 @@ class Controller:
                 self._close(now, "closing_threshold")
             return  # Closing never immediately reopens within the same event.
 
-        self._cool(now, fresh_report)
+        self._cool(now, fresh_report, target=target)
         if self._cooling_required:
             self.phase = Phase.SETTLING if self.closed_at is not None else Phase.COOLING
             return
@@ -328,10 +377,11 @@ class Controller:
         self.peak = Sample(now, self.radiator.value) if self.radiator else None
         self._cooling_required = True
         self.restart_temperature = None
+        self.cooling_fraction_used = None
         self.phase = Phase.SETTLING
         self.reason = reason
 
-    def _cool(self, now: float, fresh_report: bool):
+    def _cool(self, now: float, fresh_report: bool, *, target: float | None = None):
         if not self.room or not self.radiator:
             return
         if self.closed_at is not None:
@@ -350,8 +400,20 @@ class Controller:
                 self._update_stop()
                 self.revision += 1
             excess = self.peak.value - self.room.value
+            fraction = self._cooling_fraction(now, target)
+            # Never raise the gate into the closing threshold. The legacy base
+            # gate and ordinary no-reopen check remain intact even for a low cutoff.
+            if self.settings.adaptive_cooling and excess > self.settings.peak_drop:
+                if self.stop_temperature is None:
+                    fraction = self.settings.cooling_fraction
+                else:
+                    cap = (
+                        self.stop_temperature - self.settings.cooling_min_gap - self.room.value
+                    ) / excess
+                    fraction = max(self.settings.cooling_fraction, min(fraction, cap))
+            self.cooling_fraction_used = fraction
             self.restart_temperature = (
-                self.room.value + self.settings.cooling_fraction * excess
+                self.room.value + fraction * excess
                 if excess > self.settings.peak_drop
                 else self.room.value
             )
@@ -396,7 +458,20 @@ class Controller:
         try:
             if not isinstance(data, dict):
                 return False
-            if data.get("schema") != 1 or data.get("settings") != asdict(self.settings):
+            saved_settings = data.get("settings")
+            if not isinstance(saved_settings, dict):
+                return False
+            # Only the new, defaulted fields may be absent in beta 1–3 storage.
+            new_fields = {
+                "adaptive_cooling",
+                "cooling_fraction_max",
+                "cooling_full_error",
+                "room_trend_window",
+                "cooling_min_gap",
+            }
+            defaults = asdict(Settings())
+            saved_settings = {**{k: defaults[k] for k in new_fields}, **saved_settings}
+            if data.get("schema") != 1 or saved_settings != asdict(self.settings):
                 return False
             raw = data.get("reference")
             if raw is None:
@@ -441,6 +516,8 @@ class Controller:
             "reference_age": max(0, now - self.reference.measured_at) if self.reference else None,
             "closing_temperature": self.stop_temperature,
             "restart_temperature": self.restart_temperature,
+            "cooling_fraction_used": self.cooling_fraction_used,
+            "room_trend": self.room_trend(now),
             "lag_seconds": self.lag,
             "trend": self.trend,
             "peak_temperature": self.peak.value if self.peak else None,

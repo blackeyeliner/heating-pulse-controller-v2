@@ -45,3 +45,7 @@ The beta intentionally requires explicit re-enabling after every restart/reload.
 On 2026-10-16, both selected office sensors had temperature reporting configured for 10 s minimum / 60 s maximum. Zigbee2MQTT logs showed repeated equal temperatures at approximately one-minute intervals. HA did not advance the corresponding state timestamps for these identical MQTT sensor values. Inspection of the installed HA 2026.9.3 MQTT code confirmed that unchanged values are discarded unless `force_update` is enabled.
 
 Beta 2 accepts the identical forced `state_changed` events generated with that setting; beta 1 only accepted ordinary value changes and `state_reported` events. A regression test exercises the real HA state machine with `force_update=True`. Attribute-only events remain excluded. This fixes the transport prerequisite for plateau detection; it does not replace live heating-cycle validation.
+
+## Beta 4
+
+Adaptive cooling adds bounded room-trend/deficit-based selection of the frozen cooling threshold, disabled by default. Reference age changes to MM:SS text with a numeric seconds attribute. The expanded 66-test suite covers these changes and legacy calibration compatibility. Real hardware observations on beta 3 verified calibration and one ordinary pulse through post-close peak confirmation; beta 4 adaptation has not yet run on hardware. No consumption-saving claim follows from this baseline. See [beta 4 design](next-stage.md).

@@ -61,7 +61,11 @@ def settings_schema(values):
     for field in fields(Settings):
         name = field.name
         default = values.get(name, getattr(defaults, name))
-        schema[vol.Required(name, default=default)] = number(0.01, 86400, 0.01)
+        schema[vol.Required(name, default=default)] = (
+            selector.BooleanSelector()
+            if isinstance(getattr(defaults, name), bool)
+            else number(0.01, 86400, 0.01)
+        )
     schema[vol.Required(CONF_REPORTS, default=values.get(CONF_REPORTS, False))] = (
         selector.BooleanSelector()
     )

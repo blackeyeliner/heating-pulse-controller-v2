@@ -270,3 +270,110 @@ def test_clock_reversal_stops_open_pulse():
 def test_invalid_settings(changes):
     with pytest.raises(ValueError):
         replace(Settings(), **changes)
+
+
+def test_adaptive_cooling_reopens_earlier_but_waits_for_peak():
+    controllers = [Controller(), Controller(replace(Settings(), adaptive_cooling=True))]
+    for c in controllers:
+        valid_reference(c)
+        for t in range(-300, 1, 60):
+            c.room_report(20, t)
+        step(c, 1, 20)
+        step(c, 31, 43)
+        step(c, 61, 42)
+        assert c.phase == Phase.SETTLING
+        assert c.restart_temperature is None
+        step(c, 91, 41)
+        assert c.phase == Phase.COOLING
+    base, adaptive = controllers
+    assert base.restart_temperature == pytest.approx(26.9)
+    assert adaptive.restart_temperature == pytest.approx(33.8)
+    for c in controllers:
+        step(c, 121, 33)
+    assert base.phase == Phase.COOLING
+    assert adaptive.phase == Phase.HEATING
+    step(adaptive, 151, 42)
+    assert adaptive.reason == "closing_threshold"
+    assert adaptive.reference.temperature == 50
+
+
+@pytest.mark.parametrize(
+    ("target", "warming_per_minute", "expected"),
+    [(20.2, 0, 0.3), (20.625, 0, 0.45), (21, 0, 0.6), (21, 0.2, 0.3), (21, -0.1, 0.6)],
+)
+def test_adaptation_credits_room_progress_and_bounds_fraction(target, warming_per_minute, expected):
+    c = Controller(replace(Settings(), adaptive_cooling=True))
+    for t in range(0, 301, 60):
+        c.room_report(20 + warming_per_minute * (t - 300) / 60, t)
+    assert c._cooling_fraction(300, target) == pytest.approx(expected)
+
+
+def test_sparse_invalid_or_stale_room_trend_falls_back_to_base():
+    c = Controller(replace(Settings(), adaptive_cooling=True))
+    for t in (0, 60):
+        c.room_report(20, t)
+    assert c._cooling_fraction(60, 24) == 0.3
+    for t in (120, 180):
+        c.room_report(20, t)
+    assert c._cooling_fraction(180, 24) == 0.6
+    assert c._cooling_fraction(301, 24) == 0.3
+    c.room_report(20, 400)
+    assert c._cooling_fraction(400, 24) == 0.3
+    c.room_report(float("nan"), 430)
+    assert c.room_trend(430) is None
+
+
+def test_adaptive_gate_is_frozen_and_demand_still_required():
+    c = Controller(replace(Settings(), adaptive_cooling=True))
+    valid_reference(c)
+    for t in range(-300, 1, 60):
+        c.room_report(20, t)
+    step(c, 1, 20)
+    step(c, 31, 43)
+    step(c, 91, 41)
+    gate = c.restart_temperature
+    step(c, 121, 38, room=20.1, target=20.1)
+    assert c.restart_temperature == gate
+    step(c, 151, 30, room=20.1, target=20.1)
+    assert not c.wants_open
+    assert c.phase == Phase.IDLE
+
+
+def test_adaptive_increase_stays_below_closing_threshold():
+    c = Controller(replace(Settings(), adaptive_cooling=True))
+    t = calibration(c)
+    stop = c.stop_temperature
+    step(c, t + 60, 39)
+    assert c.restart_temperature == pytest.approx(stop - c.settings.cooling_min_gap)
+    assert not c.wants_open
+    assert c.stop_temperature == stop
+
+
+def test_beta3_calibration_restores_with_adaptation_disabled():
+    c = Controller()
+    calibration(c)
+    stored = c.dump()
+    for key in (
+        "adaptive_cooling",
+        "cooling_fraction_max",
+        "cooling_full_error",
+        "room_trend_window",
+        "cooling_min_gap",
+    ):
+        del stored["settings"][key]
+    assert Controller().restore(stored, 1000)
+    assert not Controller(replace(Settings(), adaptive_cooling=True)).restore(stored, 1000)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"adaptive_cooling": 1},
+        {"adaptive_cooling": True, "cooling_fraction_max": 1},
+        {"adaptive_cooling": True, "cooling_fraction_max": 0.2},
+        {"adaptive_cooling": True, "cooling_full_error": 0.2},
+    ],
+)
+def test_invalid_adaptive_settings(changes):
+    with pytest.raises(ValueError):
+        replace(Settings(), **changes)
