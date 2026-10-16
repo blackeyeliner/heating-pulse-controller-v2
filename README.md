@@ -2,7 +2,7 @@
 
 Adaptive radiator pulse control as a Home Assistant custom Python integration. It uses a room sensor, a radiator-surface sensor, and a fixed, mechanically reliable Sonoff TRV opening. The room's existing thermostat supplies the requested temperature and heat/off mode.
 
-**Status:** `0.1.0b2`, implemented and locally tested against Home Assistant **2026.9.3 / Python 3.14**. Not installed in production. Available as a HACS custom repository, with a separate ZIP for manual installation. This is an initial pilot, not a commissioned heating system.
+**Status:** `0.1.0b3`, implemented and locally tested against Home Assistant **2026.9.3 / Python 3.14**. Not installed in production. Available as a HACS custom repository, with a separate ZIP for manual installation. This is an initial pilot, not a commissioned heating system.
 
 ## Control behaviour
 
@@ -26,6 +26,8 @@ Custom repository: [blackeyeliner/heating-pulse-controller-v2](https://github.co
 3. In **Settings → Devices & services → Add integration**, select **Heating Pulse Controller v2**.
 4. Select the existing room thermostat, physical TRV, both temperature sensors, and Sonoff opening/closing-limit number entities. Select every legacy automation that can write to the valve or synchronise the thermostats.
 5. Review tuning and sensor-reporting semantics before turning on the new **Control enabled** switch.
+
+Versions before `0.1.0b3` incorrectly classify the controller as a helper: existing entries appear under **Settings → Devices & services → Helpers**. Version `0.1.0b3` uses the service integration type and appears under **Integrations** after an update and HA restart. Existing room configuration and entity IDs are retained; do not delete/recreate the entry.
 
 HACS reads `custom_components/heating_pulse_controller_v2/` directly from the repository. The separately built ZIP is for manual installation/recovery: extract its `custom_components/heating_pulse_controller_v2` directory into HA's `/config/custom_components/`, then restart HA.
 
