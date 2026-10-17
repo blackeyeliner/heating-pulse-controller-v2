@@ -23,7 +23,9 @@ def build(destination: Path) -> Path:
     paths = sorted(
         p
         for p in COMPONENT.rglob("*")
-        if p.is_file() and p.suffix in {".py", ".json", ".png"} and "__pycache__" not in p.parts
+        if p.is_file()
+        and p.suffix in {".py", ".json", ".png", ".yaml"}
+        and "__pycache__" not in p.parts
     )
     destination.mkdir(parents=True, exist_ok=True)
     archive = destination / f"{DOMAIN}-{manifest['version']}.zip"

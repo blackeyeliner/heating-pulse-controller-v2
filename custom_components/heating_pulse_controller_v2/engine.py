@@ -136,6 +136,7 @@ class Controller:
         self.lags: deque[float] = deque(maxlen=7)
         self.stop_temperature: float | None = None
         self.restart_temperature: float | None = None
+        self.restart_source: str | None = None
         self.peak: Sample | None = None
         self.trend: float | None = None
         self.opened_at: float | None = None
@@ -346,6 +347,7 @@ class Controller:
         self.peak = None
         self.opened_at = self.closed_at = None
         self.restart_temperature = None
+        self.restart_source = None
         self.cooling_fraction_used = None
         self._learn_lag = False
         self._cooling_required = True
@@ -381,6 +383,7 @@ class Controller:
             self.closed_at = None
             self.peak = None
             self.restart_temperature = None
+            self.restart_source = None
             self.cooling_fraction_used = None
             self._cooling_required = True
 
@@ -425,6 +428,7 @@ class Controller:
         self.closed_at = None
         self.peak = None
         self.restart_temperature = None
+        self.restart_source = None
         self.cooling_fraction_used = None
         self._pulse_exposed = True
         self._window_deadline = now + min(PWM_OPEN_SECONDS, self.settings.max_open_seconds)
@@ -511,6 +515,7 @@ class Controller:
         self.peak = Sample(now, self.radiator.value) if self.radiator else None
         self._cooling_required = True
         self.restart_temperature = None
+        self.restart_source = None
         self.cooling_fraction_used = None
         self.phase = Phase.SETTLING
         self.reason = reason
@@ -545,6 +550,7 @@ class Controller:
                         self.stop_temperature - self.settings.cooling_min_gap - self.room.value
                     ) / excess
                     fraction = max(self.settings.cooling_fraction, min(fraction, cap))
+            self.restart_source = "adaptive" if self.settings.adaptive_cooling else "base"
             self.cooling_fraction_used = fraction
             self.restart_temperature = (
                 self.room.value + fraction * excess
@@ -556,6 +562,7 @@ class Controller:
         if self.restart_temperature is None:
             # Cold-start / restart gate. Does not pretend the previous pulse is known.
             self.restart_temperature = self.room.value + self.settings.startup_excess
+            self.restart_source = "startup"
         if self.radiator.value <= self.restart_temperature:
             self._cooling_required = False
 
@@ -565,6 +572,27 @@ class Controller:
         self.fault = reason
         self.reason = reason
         self.phase = Phase.FAULT
+
+    def set_restart_gate(self, temperature: float, source: str = "manual"):
+        """Set a threshold, never a measured peak or an opening permission."""
+        if (
+            isinstance(temperature, bool)
+            or not math.isfinite(temperature)
+            or not -40 <= temperature <= 120
+        ):
+            raise ValueError("invalid_restart_temperature")
+        if source not in {"startup", "base", "adaptive", "manual"}:
+            raise ValueError("invalid_restart_source")
+        if self.wants_open:
+            raise ValueError("restart_gate_during_heating")
+        self.restart_temperature = temperature
+        self.restart_source = source
+        self.closed_at = None
+        self.peak = None
+        self.cooling_fraction_used = None
+        self._learn_lag = False
+        self._cooling_required = True
+        self.reason = "restart_gate_set"
 
     def reset_fault(self):
         self.fault = None
@@ -608,6 +636,7 @@ class Controller:
         return {
             "saved_at": now,
             "restart_temperature": self.restart_temperature,
+            "restart_source": self.restart_source,
             "peak": asdict(self.peak),
             "cooling_fraction": self.cooling_fraction_used,
             "room": asdict(self.room),
@@ -680,6 +709,7 @@ class Controller:
             return False
         self._discard_episode()
         self.restart_temperature = gate
+        self.restart_source = "adaptive" if self.settings.adaptive_cooling else "base"
         self.peak = peak
         self.cooling_fraction_used = fraction
         self.reason = "cooling_restored"
@@ -750,6 +780,7 @@ class Controller:
             "reference_age": max(0, now - self.reference.measured_at) if self.reference else None,
             "closing_temperature": self.stop_temperature,
             "restart_temperature": self.restart_temperature,
+            "restart_source": self.restart_source,
             "cooling_fraction_used": self.cooling_fraction_used,
             "room_trend": self.room_trend(now),
             "lag_seconds": self.lag,

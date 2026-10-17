@@ -2,7 +2,7 @@
 
 Adaptive radiator pulse control as a Home Assistant custom Python integration. It uses a room sensor, a radiator-surface sensor, and a fixed, mechanically reliable Sonoff TRV opening. The room's existing thermostat supplies the requested temperature and heat/off mode.
 
-**Status:** `0.1.0b9`, tested against Home Assistant **2026.9.3 / Python 3.14**. Beta 4 adaptive calibration and ordinary cycles have been observed in the office pilot. Beta 5 corrects Reference age Activity spam. Beta 6 adds optional window-aware PWM and emergency window closure. Beta 7 preserves validated cooling episodes across clean restarts. Beta 9 switches termination rules in place when the window changes; window PWM uses 10 minutes on / at least 40 minutes off without an initial forced pause. Available as a HACS custom repository, with a separate ZIP for manual installation. Long-term comfort and consumption assessment remain ongoing.
+**Status:** `0.1.0b10`, tested against Home Assistant **2026.9.3 / Python 3.14**. Beta 4 adaptive calibration and ordinary cycles have been observed in the office pilot. Beta 5 corrects Reference age Activity spam. Beta 6 adds optional window-aware PWM and emergency window closure. Beta 7 preserves validated cooling episodes across clean restarts. Beta 9 switches window termination in place; beta 10 also persists the last selected cooling threshold independently of a confirmed peak. Window PWM uses 10 minutes on / at least 40 minutes off without an initial forced pause. Available as a HACS custom repository, with a separate ZIP for manual installation. Long-term comfort and consumption assessment remain ongoing.
 
 ## Control behaviour
 
@@ -108,9 +108,15 @@ Faults are latched. Turn off control, correct the reason (such as stale data or 
 
 Versioned storage retains the reference, its trace and usable delay observations. On clean shutdown/reload after successful valve closure it also records a confirmed cooling peak, frozen restart threshold/fraction, timestamp and latest sensor observations. Startup consumes that checkpoint before subscribing, so a later crash cannot resurrect a previous episode. It never restores a running pulse, room-demand latch, ready-to-open latch or enabled state.
 
+The selected restart threshold is also stored separately with its origin (`startup`, `base`, `adaptive`, or `manual`) and matching settings/sensor/actuator/window bindings. It survives updates and restarts even without a confirmed peak, during settling/window exposure, or after a longer downtime. Restore the parameter only after fresh post-start sensor reports, known window feedback and closed TRV limits; never restore a demand/ready latch, measured peak, PWM timer or enabled state from this record. Fresh radiator temperature still has to satisfy the restored threshold. The threshold record does not expire with the 180-second sensor timeout; that timeout still applies to current sensor readings. Settings/binding changes or malformed data invalidate it.
+
+When a complete beta 7 cooling episode validates, retain its full information. Otherwise the independent threshold can restore without inventing a peak. Restart temperature exposes `source`; `restore_status: restored_gate` identifies this threshold-only path. A missing old checkpoint is no longer a reason to replace a saved threshold with room +3 °C. Releases before beta 10 did not write the independent record.
+
+For a one-time threshold adjustment, use the action `heating_pulse_controller_v2.set_restart_temperature` with `config_entry_id` and `temperature` (°C). It is allowed only while not heating and without a fault. This sets and persists the current gate with source `manual`; it does not change the room setpoint, force a pulse, or permanently fix the threshold. The next confirmed peak recalculates the gate normally.
+
 Cooling restoration waits for fresh post-start reports from both sensors, a logically closed window (or no configured window), and closed TRV limits. Settings and selected sensor/actuator/window bindings must match. The checkpoint must still be within the configured radiator freshness timeout (180 seconds by default), temperatures/timestamps/fraction must be valid, and the radiator must not have warmed more than the peak-drop tolerance during the blind interval. Observed window opening discards it. Unknown window feedback waits within that same deadline. After restoration, current temperature must still satisfy the saved gate before heating can begin.
 
-Unconfirmed peaks, interrupted heating/calibration, window PWM, faults, stale/changed/incompatible observations and failed final closure do not qualify. In those cases the original startup gate remains. Older releases saved no cooling episode, so an ordinary upgrade from them cannot reconstruct it automatically. The Restart temperature sensor's `restore_status` attribute explains whether the checkpoint was restored, absent, waiting or discarded. The live loop uses bounded memory and does not query Recorder.
+Unconfirmed peaks, interrupted heating/calibration, window PWM, faults, stale/changed/incompatible observations and failed final closure do not qualify for full episode restoration. The independent threshold still remains eligible under its own compatibility/fresh-feedback checks; only if neither record is usable does startup use room +3 °C. Versions before beta 7 saved no cooling episode; versions before beta 10 saved no independent threshold. Missing historical information cannot be reconstructed automatically. The Restart temperature sensor's `restore_status` attribute explains whether the checkpoint was restored, absent, waiting or discarded. The live loop uses bounded memory and does not query Recorder.
 
 ## Development
 
@@ -122,7 +128,7 @@ uv run ruff format --check .
 uv run python tools/build_release.py
 ```
 
-The ZIP and SHA-256 file appear in `dist/`. Its contents are restricted to integration Python, JSON and icons. Local backups, history, credentials and developer tools are excluded.
+The ZIP and SHA-256 file appear in `dist/`. Its contents are restricted to integration Python, JSON, service YAML and icons. Local backups, history, credentials and developer tools are excluded.
 
 Recorded-history inspection is read-only:
 

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import math
 import time
-from dataclasses import fields
+from dataclasses import asdict, fields
 from datetime import timedelta
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, UnitOfTemperature
@@ -68,7 +68,88 @@ class Runtime:
         self._window_close_reason = None
         self._window_deadline_cancel = None
         self._pending_cooling = None
+        self._restart_gate = None
+        self._pending_gate = None
+        self._started_at = self.now()
         self._cooling_restore_status = "not_saved"
+
+    def _capture_gate(self):
+        if self._pending_gate is not None or self.engine.fault:
+            return
+        gate = self.engine.restart_temperature
+        source = self.engine.restart_source
+        if gate is not None and source is not None:
+            if self._restart_gate is None or (gate, source) != (
+                self._restart_gate["temperature"],
+                self._restart_gate["source"],
+            ):
+                self._restart_gate = {"temperature": gate, "source": source, "saved_at": self.now()}
+
+    def _storage_data(self):
+        self._capture_gate()
+        stored = self.engine.dump()
+        if self._restart_gate is not None:
+            stored["restart_gate"] = self._restart_gate
+            stored["restart_gate_context"] = self._cooling_context()
+        return stored
+
+    def _valid_gate(self, record):
+        try:
+            value, saved, source = record["temperature"], record["saved_at"], record["source"]
+            return (
+                not isinstance(value, bool)
+                and math.isfinite(value)
+                and -40 <= value <= 120
+                and not isinstance(saved, bool)
+                and math.isfinite(saved)
+                and saved <= self.now()
+                and source in {"startup", "base", "adaptive", "manual"}
+            )
+        except KeyError, TypeError, ValueError, OverflowError:
+            return False
+
+    def _restore_gate_if_ready(self):
+        if self._pending_gate is None:
+            return
+        if self._cooling_restore_status == "restored":
+            self._pending_gate = None
+            return
+        now = self.now()
+        if self.engine.fault or self.engine.wants_open:
+            return
+        if self._window_open() is None:
+            return
+        for sample, timeout in (
+            (self.engine.room, self.engine.settings.room_timeout),
+            (self.engine.radiator, self.engine.settings.radiator_timeout),
+        ):
+            if sample is None or sample.at < self._started_at or now - sample.at > timeout:
+                return
+        for key, expected in ((CONF_OPENING, 0), (CONF_CLOSING, 100)):
+            state = self.hass.states.get(self.config[key])
+            try:
+                if state is None or float(state.state) != expected:
+                    return
+            except ValueError, TypeError:
+                return
+        record = self._pending_gate
+        self._pending_gate = None
+        self._pending_cooling = None
+        self.engine.set_restart_gate(record["temperature"], record["source"])
+        self._cooling_restore_status = "restored_gate"
+
+    async def set_restart_temperature(self, temperature):
+        async with self._lock:
+            if self._closed or self.engine.wants_open or self.engine.fault:
+                raise HomeAssistantError(
+                    "Set restart temperature only while not heating and without a fault"
+                )
+            self.engine.set_restart_gate(temperature)
+            self._pending_gate = self._pending_cooling = None
+            self._cooling_restore_status = "manual"
+            await self.store.async_save(self._storage_data())
+            self._notify()
+        await self._process()
 
     def _cooling_context(self):
         return {
@@ -90,9 +171,21 @@ class Runtime:
         return self._wall + time.monotonic() - self._monotonic
 
     async def start(self):
+        self._started_at = self.now()
         stored = await self.store.async_load()
         if stored:
             restored = self.engine.restore(stored, self.now())
+            if isinstance(stored, dict) and stored.get("restart_gate") is not None:
+                if (
+                    stored.get("settings") == asdict(self.engine.settings)
+                    and stored.get("restart_gate_context") == self._cooling_context()
+                    and self._valid_gate(stored["restart_gate"])
+                ):
+                    self._restart_gate = stored["restart_gate"]
+                    self._pending_gate = self._restart_gate
+                    self._cooling_restore_status = "waiting_for_fresh_reports"
+                else:
+                    self._cooling_restore_status = "incompatible"
             if isinstance(stored, dict) and stored.get("cooling") is not None:
                 if restored and stored.get("cooling_context") == self._cooling_context():
                     self._pending_cooling = stored["cooling"]
@@ -101,7 +194,7 @@ class Runtime:
                     self._cooling_restore_status = "incompatible"
                 # Consume the clean-stop checkpoint before subscribing. A crash
                 # in this session must never resurrect the previous episode.
-                await self.store.async_save(self.engine.dump())
+                await self.store.async_save(self._storage_data())
         # No initial state snapshot is passed off as a fresh report.
         watched = (
             self._sensor_ids + [self.config[CONF_THERMOSTAT]] + self.config.get(CONF_GUARDS, [])
@@ -358,6 +451,8 @@ class Runtime:
             before = self.engine.revision
             previous = (self.engine.phase, self.engine.reason)
             self._restore_cooling_if_ready()
+            self._restore_gate_if_ready()
+            gate_before = self._restart_gate
             mode, target = self._inputs()
             if self.enabled and not self._guards_clear():
                 self.engine.trip("legacy_controller_enabled", now)
@@ -387,8 +482,9 @@ class Runtime:
                     _LOGGER.exception("Valve command failed for %s", self.entry.title)
                     self.engine.trip("actuator_error", self.now())
                     self.enabled = False
-            if before != self.engine.revision:
-                self.store.async_delay_save(self.engine.dump, 1)
+            self._capture_gate()
+            if before != self.engine.revision or gate_before != self._restart_gate:
+                self.store.async_delay_save(self._storage_data, 1)
             if previous != (self.engine.phase, self.engine.reason):
                 _LOGGER.info("%s: %s (%s)", self.entry.title, self.engine.phase, self.engine.reason)
             self._arm_window_deadline()
@@ -450,7 +546,7 @@ class Runtime:
             raise HomeAssistantError("Disable control before resetting calibration")
         async with self._lock:
             self.engine.reset_reference()
-            await self.store.async_save(self.engine.dump())
+            await self.store.async_save(self._storage_data())
             self._notify()
 
     async def _stop_event(self, _event):
@@ -482,7 +578,7 @@ class Runtime:
                     target=20,
                     window_open=self._window_open(),
                 )
-                stored = self.engine.dump()
+                stored = self._storage_data()
                 if (
                     self._owned
                     and self.actuator.commanded_open is False

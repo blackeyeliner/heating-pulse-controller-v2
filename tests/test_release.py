@@ -16,6 +16,7 @@ def test_release_has_only_integration_and_is_reproducible(tmp_path):
         assert all(n.startswith("custom_components/heating_pulse_controller_v2/") for n in names)
         assert not any("local/" in n or ".secrets" in n or "__pycache__" in n for n in names)
         assert any(n.endswith("config_flow.py") for n in names)
+        assert any(n.endswith("services.yaml") for n in names)
         assert any(n.endswith("brand/icon.png") for n in names)
         assert contents.testzip() is None
 
