@@ -13,4 +13,5 @@ CONF_CLOSE_VALUE = "closing_value"
 CONF_OUTPUT = "output_helper"
 CONF_GUARDS = "legacy_automations"
 CONF_REPORTS = "reporting_verified"
-PLATFORMS = ["sensor", "switch", "button"]
+CONF_WINDOW = "window_cover"
+PLATFORMS = ["sensor", "binary_sensor", "switch", "button"]

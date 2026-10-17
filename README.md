@@ -2,7 +2,7 @@
 
 Adaptive radiator pulse control as a Home Assistant custom Python integration. It uses a room sensor, a radiator-surface sensor, and a fixed, mechanically reliable Sonoff TRV opening. The room's existing thermostat supplies the requested temperature and heat/off mode.
 
-**Status:** `0.1.0b5`, tested against Home Assistant **2026.9.3 / Python 3.14**. Beta 4 adaptive calibration and ordinary cycles have been observed in the office pilot. Beta 5 corrects Reference age Activity spam without changing the heating algorithm. Available as a HACS custom repository, with a separate ZIP for manual installation. Long-term comfort and consumption assessment remain ongoing.
+**Status:** `0.1.0b6`, tested against Home Assistant **2026.9.3 / Python 3.14**. Beta 4 adaptive calibration and ordinary cycles have been observed in the office pilot. Beta 5 corrects Reference age Activity spam. Beta 6 adds optional window-aware PWM and emergency window closure. Available as a HACS custom repository, with a separate ZIP for manual installation. Long-term comfort and consumption assessment remain ongoing.
 
 ## Control behaviour
 
@@ -85,9 +85,23 @@ A negative slope tolerance of 0.08 °C/min accommodates noise; sustained cooling
 
 The ordinary closing threshold comes from the observed calibration trace at estimated plateau onset minus residual delay. Several usable post-close peaks refine the delay; diagnostic pulses do not. No extrapolation is allowed: an unidentifiable threshold causes `unusable_calibration`, requiring review rather than guessed heating commands.
 
+## Optional window control (beta 6)
+
+Select a **Window motor** through Configure to enable this policy for one room. Leave it empty to preserve ordinary operation. Configuration/reload remains passive and Control enabled must be explicitly turned on after fresh temperature reports. Clearing the selection removes window control.
+
+- An open, opening, closing or partially open cover interrupts the normal pulse and discards its uncompleted calibration/lag/peak observation. The saved reference and learned lag remain; reference age continues increasing.
+- Start with **480 seconds closed**, then open at the calibrated minimum for **up to 120 seconds**. Close for at least 480 seconds after each pulse. Skip or truncate heating when the room reaches the normal stop band. Missed pulses are not replayed; a late closure extends the subsequent pause to at least four times the elapsed opening. This is a nominal maximum 20% commanded duty cycle, not 20% stem position or measured flow. HA/service delays and crashes are not hard-real-time guarantees.
+- No reference, plateau, residual-lag or peak learning occurs during window PWM. An unavailable/unknown cover inhibits heating rather than being treated as closed.
+- While Control enabled is on, **room ≤16 °C OR radiator ≤10 °C requests immediate `cover.close_cover`**, without first testing a heating response. PWM stops at those boundaries. Window protection also operates during a latched heating fault and with the thermostat off; it is inactive when Control enabled is off or the integration is unloaded. Each fresh, independently cold sensor can trigger closure even if the other sensor is missing. Stale values are not used as current measurements.
+- Do not confuse service success with physical closure. If the cover remains exposed (or unknown), closure can be retried at most once per 30 seconds while cold. Command failures are logged and exposed through **Window status**. The controller never opens the window.
+- Confirmed closure exits PWM, closes any running pulse and discards the window-exposed curve. Normal room demand and startup cooling checks resume on subsequent evaluations. An expired reference is recalibrated on the next eligible ordinary pulse.
+- **Window opening allowed**, a new binary sensor, is off when enabled control sees either cold threshold or lacks fresh temperature data. Add a condition requiring this sensor to be `on` to external automatic opening routines, including group commands that could reopen this window. Manual reopening while cold causes another emergency close. This interlock does not itself rewrite external automations.
+
+The cover state is the motor's logical feedback, not an independent contact sensor. These thresholds are the pilot owner's selected operating limits, not a certification against freezing. A sensor can miss a colder part of the radiator; closure needs working hardware, HA and communication. Existing faults remain latched and are not automatically reset by a window event.
+
 ## Operation and diagnostics
 
-Each room has nine diagnostic sensors: phase, last decision, reference temperature/age, closing temperature, restart temperature, residual warming delay, radiator trend and last peak. It also has a control-enable switch and buttons to reset a fault or calibration.
+Each room has nine core diagnostic sensors: phase, last decision, reference temperature/age, closing temperature, restart temperature, residual warming delay, radiator trend and last peak. It also has a control-enable switch and buttons to reset a fault or calibration.
 
 Faults are latched. Turn off control, correct the reason (such as stale data or a legacy writer), reset the fault, then enable again. Resetting calibration also requires control to be off. The diagnostic download contains controller values without selected entity IDs or credentials.
 

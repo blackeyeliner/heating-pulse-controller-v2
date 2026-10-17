@@ -135,3 +135,36 @@ async def test_real_ui_flow_and_duplicate_actuator(hass, config, devices):
     assert not entry.runtime_data.enabled
     assert devices == []
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_optional_window_entities_and_options_removal(hass, config, devices):
+    await setup_hass(hass)
+    hass.states.async_set("cover.window", "closed", {"supported_features": 15})
+    entry = ConfigEntry(
+        version=1,
+        minor_version=1,
+        domain=DOMAIN,
+        title="Window pilot",
+        data={**config, **asdict(Settings()), "window_cover": "cover.window"},
+        options={},
+        source="user",
+        unique_id=config["trv"],
+        discovery_keys=MappingProxyType({}),
+        subentries_data=[],
+    )
+    await hass.config_entries.async_add(entry)
+    await hass.async_block_till_done()
+    assert entry.state == ConfigEntryState.LOADED
+    assert hass.states.get("sensor.window_pilot_window_status").state == "closed"
+    assert hass.states.get("binary_sensor.window_pilot_window_opening_allowed").state == "on"
+    assert devices == []
+    options = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        options["flow_id"], {**asdict(Settings()), "reporting_verified": True}
+    )
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+    assert entry.runtime_data.config["window_cover"] == ""
+    assert not entry.runtime_data.enabled
+    assert devices == []
+    await hass.config_entries.async_unload(entry.entry_id)

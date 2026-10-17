@@ -3,6 +3,7 @@
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import EntityCategory
 
+from .const import CONF_WINDOW
 from .entity import PulseEntity
 
 SENSORS = {
@@ -15,11 +16,16 @@ SENSORS = {
     "lag_seconds": ("Residual warming delay", "s"),
     "trend": ("Radiator trend", "°C/min"),
     "peak_temperature": ("Last peak", "°C"),
+    "window_status": ("Window status", None),
 }
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    async_add_entities(PulseSensor(entry, key) for key in SENSORS)
+    async_add_entities(
+        PulseSensor(entry, key)
+        for key in SENSORS
+        if key != "window_status" or entry.runtime_data.config.get(CONF_WINDOW)
+    )
 
 
 class PulseSensor(PulseEntity, SensorEntity):

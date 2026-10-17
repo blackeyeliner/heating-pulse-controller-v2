@@ -41,3 +41,14 @@ async def test_bad_tuning_does_not_create_entry(hass):
 def test_non_celsius_is_rejected(hass, config, devices, unit):
     hass.states.async_set("sensor.radiator", 20, {"unit_of_measurement": unit})
     assert validate_entities(hass, config) == "celsius_required"
+
+
+def test_window_selection_requires_close_support(hass):
+    from custom_components.heating_pulse_controller_v2.config_flow import validate_window
+
+    assert validate_window(hass, {}) is None
+    assert validate_window(hass, {"window_cover": "cover.window"}) == "entity_unavailable"
+    hass.states.async_set("cover.window", "closed", {"supported_features": 1})
+    assert validate_window(hass, {"window_cover": "cover.window"}) == "unsupported_window"
+    hass.states.async_set("cover.window", "closed", {"supported_features": 15})
+    assert validate_window(hass, {"window_cover": "cover.window"}) is None

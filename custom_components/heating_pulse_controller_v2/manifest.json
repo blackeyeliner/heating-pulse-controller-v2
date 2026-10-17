@@ -10,12 +10,13 @@
     "number",
     "sensor",
     "input_number",
-    "automation"
+    "automation",
+    "cover"
   ],
   "documentation": "https://github.com/blackeyeliner/heating-pulse-controller-v2",
   "integration_type": "service",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/blackeyeliner/heating-pulse-controller-v2/issues",
   "requirements": [],
-  "version": "0.1.0b5"
+  "version": "0.1.0b6"
 }

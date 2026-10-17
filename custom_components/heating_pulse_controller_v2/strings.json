@@ -21,7 +21,7 @@
       },
       "tuning": {
         "title": "Control parameters",
-        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode.",
+        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode. With a window selected, open-window heating uses 120 seconds on / at least 480 seconds off. Room ≤16 °C or radiator ≤10 °C requests immediate window closure while Control enabled is on, including during heating faults. No physical closure or frost protection is guaranteed.",
         "data": {
           "reference_seconds": "Reference lifetime (seconds)",
           "cooling_fraction": "Remaining temperature excess before restart (fraction)",
@@ -48,7 +48,8 @@
           "cooling_fraction_max": "Maximum remaining temperature excess with adaptive cooling (fraction)",
           "cooling_full_error": "Projected room deficit for maximum restart fraction (°C)",
           "room_trend_window": "Room trend and projection window (seconds)",
-          "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (°C)"
+          "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (°C)",
+          "window_cover": "Window motor (optional; enables 20% PWM and emergency closure)"
         }
       }
     },
@@ -60,7 +61,8 @@
       "unsupported_climate": "Both thermostats must support heat and off.",
       "unsupported_limits": "Limit entities must support the full 0–100 range.",
       "inverted_limits": "The minimum position (100 minus closing limit) must not exceed the opening limit.",
-      "invalid_settings": "Check positive values, fractions between 0 and 1, hysteresis, delay bounds, sample gap and maximum heating duration."
+      "invalid_settings": "Check positive values, fractions between 0 and 1, hysteresis, delay bounds, sample gap and maximum heating duration.",
+      "unsupported_window": "The window cover must support closing."
     },
     "abort": {
       "already_configured": "An existing controller already owns this actuator."
@@ -70,7 +72,7 @@
     "step": {
       "init": {
         "title": "Control parameters",
-        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode.",
+        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode. With a window selected, open-window heating uses 120 seconds on / at least 480 seconds off. Room ≤16 °C or radiator ≤10 °C requests immediate window closure while Control enabled is on, including during heating faults. No physical closure or frost protection is guaranteed.",
         "data": {
           "reference_seconds": "Reference lifetime (seconds)",
           "cooling_fraction": "Remaining temperature excess before restart (fraction)",
@@ -97,12 +99,15 @@
           "cooling_fraction_max": "Maximum remaining temperature excess with adaptive cooling (fraction)",
           "cooling_full_error": "Projected room deficit for maximum restart fraction (°C)",
           "room_trend_window": "Room trend and projection window (seconds)",
-          "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (°C)"
+          "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (°C)",
+          "window_cover": "Window motor (optional; enables 20% PWM and emergency closure)"
         }
       }
     },
     "error": {
-      "invalid_settings": "Check positive values, fractions between 0 and 1, hysteresis, delay bounds, sample gap and maximum heating duration."
+      "invalid_settings": "Check positive values, fractions between 0 and 1, hysteresis, delay bounds, sample gap and maximum heating duration.",
+      "entity_unavailable": "A selected entity is missing or unavailable.",
+      "unsupported_window": "The window cover must support closing."
     }
   }
 }

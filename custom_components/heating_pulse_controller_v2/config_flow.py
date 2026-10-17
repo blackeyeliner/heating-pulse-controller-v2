@@ -4,6 +4,7 @@ import math
 from dataclasses import fields
 
 import voluptuous as vol
+from homeassistant.components.cover import CoverEntityFeature
 from homeassistant.config_entries import ConfigFlow, OptionsFlowWithReload
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import callback
@@ -21,6 +22,7 @@ from .const import (
     CONF_ROOM,
     CONF_THERMOSTAT,
     CONF_TRV,
+    CONF_WINDOW,
     DOMAIN,
 )
 from .engine import Settings
@@ -69,7 +71,21 @@ def settings_schema(values):
     schema[vol.Required(CONF_REPORTS, default=values.get(CONF_REPORTS, False))] = (
         selector.BooleanSelector()
     )
+    schema[vol.Optional(CONF_WINDOW, description={"suggested_value": values.get(CONF_WINDOW)})] = (
+        entity("cover")
+    )
     return vol.Schema(schema)
+
+
+def validate_window(hass, data):
+    if not data.get(CONF_WINDOW):
+        return None
+    state = hass.states.get(data[CONF_WINDOW])
+    if state is None or state.state in ("unknown", "unavailable"):
+        return "entity_unavailable"
+    if not state.attributes.get("supported_features", 0) & CoverEntityFeature.CLOSE:
+        return "unsupported_window"
+    return None
 
 
 def validate_settings(data):
@@ -151,6 +167,12 @@ class PulseConfigFlow(ConfigFlow, domain=DOMAIN):
             except ValueError, TypeError:
                 errors["base"] = "invalid_settings"
             else:
+                if error := validate_window(self.hass, user_input):
+                    return self.async_show_form(
+                        step_id="tuning",
+                        data_schema=settings_schema(user_input),
+                        errors={"base": error},
+                    )
                 return self.async_create_entry(
                     title=self._data["name"], data={**self._data, **user_input}
                 )
@@ -173,7 +195,15 @@ class PulseOptionsFlow(OptionsFlowWithReload):
             except ValueError, TypeError:
                 errors["base"] = "invalid_settings"
             else:
-                return self.async_create_entry(data=user_input)
+                if error := validate_window(self.hass, user_input):
+                    return self.async_show_form(
+                        step_id="init",
+                        data_schema=settings_schema(user_input),
+                        errors={"base": error},
+                    )
+                return self.async_create_entry(
+                    data={**user_input, CONF_WINDOW: user_input.get(CONF_WINDOW, "")}
+                )
         values = {**self.config_entry.data, **self.config_entry.options, **(user_input or {})}
         return self.async_show_form(
             step_id="init", data_schema=settings_schema(values), errors=errors
