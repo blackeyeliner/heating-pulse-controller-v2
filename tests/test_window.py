@@ -22,9 +22,9 @@ def test_pwm_waits_first_and_never_learns_from_heating_or_falling_surface():
     c = Controller()
     valid_reference(c)
     before = c.dump()
-    for at in range(0, 1801, 10):
-        tick(c, at, rad=35 - (at % 600) / 60)
-        assert c.wants_open == (at % 600 >= 480)
+    for at in range(0, 9001, 10):
+        tick(c, at, rad=35 - (at % 3000) / 300)
+        assert c.wants_open == (at % 3000 >= 2400)
         assert not c.fault
     assert c.dump() == before
     assert c.trend is None and c.peak is None and not c._trace
@@ -33,12 +33,12 @@ def test_pwm_waits_first_and_never_learns_from_heating_or_falling_surface():
 def test_delayed_callback_extends_pause_instead_of_catching_up():
     c = Controller()
     tick(c, 0)
-    tick(c, 480)
-    tick(c, 620)
+    tick(c, 2400)
+    tick(c, 3020)
     assert not c.wants_open
-    tick(c, 1100)
+    tick(c, 5420)
     assert not c.wants_open
-    tick(c, 1180)
+    tick(c, 5500)
     assert c.wants_open
 
 
@@ -48,13 +48,13 @@ def test_open_window_cancels_calibration_and_close_discards_contaminated_curve()
     assert c.phase == Phase.CALIBRATING
     tick(c, 30, rad=30)
     assert not c.wants_open and c.reference is None
-    tick(c, 510, rad=25)
+    tick(c, 2430, rad=25)
     assert c.phase == Phase.WINDOW_HEATING
-    tick(c, 520, window=False, rad=20)
+    tick(c, 2440, window=False, rad=20)
     assert not c.wants_open and not c._trace and c.peak is None
-    tick(c, 525, window=False, rad=20)
+    tick(c, 2445, window=False, rad=20)
     assert c.phase == Phase.CALIBRATING
-    assert c._trace[0].at == 525
+    assert c._trace[0].at == 2445
 
 
 @pytest.mark.parametrize(
@@ -64,9 +64,9 @@ def test_open_window_cancels_calibration_and_close_discards_contaminated_curve()
 def test_cold_boundaries_stop_pwm(room, rad, reason):
     c = Controller()
     tick(c, 0)
-    tick(c, 480)
+    tick(c, 2400)
     assert c.wants_open
-    tick(c, 490, room=room, rad=rad)
+    tick(c, 2410, room=room, rad=rad)
     assert not c.wants_open and c.reason == reason
     assert c.reference is None and not c.fault
 
@@ -77,8 +77,8 @@ def test_cold_boundaries_stop_pwm(room, rad, reason):
 def test_pwm_inhibitions(kwargs):
     c = Controller()
     tick(c, 0)
-    tick(c, 480)
-    tick(c, 490, **kwargs)
+    tick(c, 2400)
+    tick(c, 2410, **kwargs)
     assert not c.wants_open
 
 
@@ -225,18 +225,23 @@ async def test_live_pwm_closes_by_deadline_and_unavailable_cover_inhibits(hass, 
     await r.set_enabled(True)
     assert not r.actuator.commanded_open
     assert r.window_opening_allowed()
-    for _ in range(8):
+    for _ in range(40):
         clock[0] += 60
         await fresh(hass)
         await r._process()
     assert r.actuator.commanded_open
     assert r._window_deadline_cancel is not None
-    clock[0] += 120
+    for _ in range(9):
+        clock[0] += 60
+        await fresh(hass)
+        await r._process()
+        assert r.actuator.commanded_open
+    clock[0] += 60
     await fresh(hass)
     await r._process()
     assert r.actuator.commanded_open is False
     assert r._window_deadline_cancel is None
-    for _ in range(8):
+    for _ in range(40):
         clock[0] += 60
         await fresh(hass)
         await r._process()

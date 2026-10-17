@@ -1,4 +1,22 @@
-# Validation of 0.1.0b2
+# Validation
+
+## Current result: beta 8, 2026-10-17
+
+Version `0.1.0b8`: **125 tests passed** against HA 2026.9.3 / Python 3.14. Lint, format and deterministic packaging passed locally. Beta 7 also passed both published GitHub CI runs and production `ha core check`; beta 8 deployment results are recorded separately. Five dependency deprecation warnings remain. The historical coverage percentages below are beta 1 measurements, not a current coverage report.
+
+Beta 8 changes the window period to up to 10 minutes open / at least 40 minutes closed, retaining 20% nominal maximum duty and the initial closed interval. Tests span three full periods and verify the HA actuator stays open beyond two minutes, closes at ten minutes, and waits forty minutes before reopening.
+
+The suite now also covers adaptive cooling, numeric Reference age, window PWM and cold-closure handling, opening interlocks, and confirmed cooling checkpoint persistence. A real HA config-entry reload using its actual Store restores a 29 °C gate and permits fresh room demand at radiator 28 °C after explicit enable. Invalid/old/warming observations, changed settings or bindings, unknown feedback, open windows and failed final closure reject or defer restoration as appropriate. Hardware services remain simulated in these tests.
+
+Production beta 7 was installed through HACS and enabled after fresh reports at 09:55:20 Europe/Prague. Only Anton's Office is migrated. Confirmed hardware observations across the pilot include baseline calibration, ordinary threshold closure, residual peak, adaptive cycles, lower-plateau replacement, scheduled recalibration and interruption of an ordinary pulse by actual window feedback (09:50:51 on beta 6). Numeric Reference age advances live without new timer Recorder rows or selected-device/entity Activity events.
+
+Still pending: a complete physical window PWM cycle, emergency closure at the configured cold thresholds, the first actual production cooling-checkpoint restore, and outage/physical closure assessment. Automated HA reload coverage is not evidence that production has already restored a checkpoint. The first beta 7 upgrade had none to restore because beta 6 did not save one and the preceding pulse was window-interrupted. No production sensor values were fabricated for testing.
+
+Overnight 00:00–08:11 on October 17, target 23.5 °C: room 23.19–23.53 °C (mean 23.358 °C), seven pulses and approximately 70 minutes commanded open (14.3%). This does not establish sustained 24 °C control, measured flow, heat consumption or monetary savings.
+
+The authoritative dated deployment record and operating handoff are in the vault's `projects/home-assistant/subprojects/heating-pulse-controller-v2.md`. The sections below are historical results at their stated release dates; their then-pending steps do not override the current result above.
+
+## Historical beta 2 baseline
 
 Date: 2026-10-16. Development environment: Python 3.14.7, Home Assistant 2026.9.3, matching the pilot's installed HA Core version. Tests use a temporary HA config directory and fake actuator services; none issue production commands.
 

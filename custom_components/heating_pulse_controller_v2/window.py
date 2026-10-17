@@ -1,7 +1,7 @@
 """Window input and fixed ventilation policy, independent of Home Assistant."""
 
-PWM_OPEN_SECONDS = 120
-PWM_CLOSED_SECONDS = 480
+PWM_OPEN_SECONDS = 600
+PWM_CLOSED_SECONDS = 2400
 ROOM_CLOSE_TEMPERATURE = 16
 RADIATOR_CLOSE_TEMPERATURE = 10
 
