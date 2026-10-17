@@ -60,5 +60,6 @@ class PulseSensor(PulseEntity, SensorEntity):
             return {
                 "cooling_fraction": diagnostics["cooling_fraction_used"],
                 "room_trend": diagnostics["room_trend"],
+                "restore_status": diagnostics["cooling_restore_status"],
             }
         return None

@@ -2,7 +2,7 @@
 
 Adaptive radiator pulse control as a Home Assistant custom Python integration. It uses a room sensor, a radiator-surface sensor, and a fixed, mechanically reliable Sonoff TRV opening. The room's existing thermostat supplies the requested temperature and heat/off mode.
 
-**Status:** `0.1.0b6`, tested against Home Assistant **2026.9.3 / Python 3.14**. Beta 4 adaptive calibration and ordinary cycles have been observed in the office pilot. Beta 5 corrects Reference age Activity spam. Beta 6 adds optional window-aware PWM and emergency window closure. Available as a HACS custom repository, with a separate ZIP for manual installation. Long-term comfort and consumption assessment remain ongoing.
+**Status:** `0.1.0b7`, tested against Home Assistant **2026.9.3 / Python 3.14**. Beta 4 adaptive calibration and ordinary cycles have been observed in the office pilot. Beta 5 corrects Reference age Activity spam. Beta 6 adds optional window-aware PWM and emergency window closure. Beta 7 preserves validated cooling episodes across clean restarts. Available as a HACS custom repository, with a separate ZIP for manual installation. Long-term comfort and consumption assessment remain ongoing.
 
 ## Control behaviour
 
@@ -31,7 +31,7 @@ Versions before `0.1.0b3` incorrectly classify the controller as a helper: exist
 
 HACS reads `custom_components/heating_pulse_controller_v2/` directly from the repository. The separately built ZIP is for manual installation/recovery: extract its `custom_components/heating_pulse_controller_v2` directory into HA's `/config/custom_components/`, then restart HA.
 
-Installation and configuration send **no valve commands**. The pilot starts disabled after every HA restart or integration reload. Calibration can be restored, but an interrupted open pulse and the enabled state are never restored. Re-enable explicitly after checking the room. Automatic restart of heating is a later operating-policy decision, not implemented in this beta.
+Installation and configuration send **no valve commands**. The pilot starts disabled after every HA restart or integration reload. Calibration and a validated confirmed cooling episode can be restored, but an interrupted open pulse and the enabled state are never restored. Re-enable explicitly after checking the room. Automatic restart of heating is a later operating-policy decision, not implemented in this beta.
 
 ## Actuator and ownership
 
@@ -105,7 +105,11 @@ Each room has nine core diagnostic sensors: phase, last decision, reference temp
 
 Faults are latched. Turn off control, correct the reason (such as stale data or a legacy writer), reset the fault, then enable again. Resetting calibration also requires control to be off. The diagnostic download contains controller values without selected entity IDs or credentials.
 
-Versioned storage retains the reference, its trace and usable delay observations. It does not store an in-progress open pulse. The live loop uses bounded memory and does not query Recorder.
+Versioned storage retains the reference, its trace and usable delay observations. On clean shutdown/reload after successful valve closure it also records a confirmed cooling peak, frozen restart threshold/fraction, timestamp and latest sensor observations. Startup consumes that checkpoint before subscribing, so a later crash cannot resurrect a previous episode. It never restores a running pulse, room-demand latch, ready-to-open latch or enabled state.
+
+Cooling restoration waits for fresh post-start reports from both sensors, a logically closed window (or no configured window), and closed TRV limits. Settings and selected sensor/actuator/window bindings must match. The checkpoint must still be within the configured radiator freshness timeout (180 seconds by default), temperatures/timestamps/fraction must be valid, and the radiator must not have warmed more than the peak-drop tolerance during the blind interval. Observed window opening discards it. Unknown window feedback waits within that same deadline. After restoration, current temperature must still satisfy the saved gate before heating can begin.
+
+Unconfirmed peaks, interrupted heating/calibration, window PWM, faults, stale/changed/incompatible observations and failed final closure do not qualify. In those cases the original startup gate remains. Older releases saved no cooling episode, so an ordinary upgrade from them cannot reconstruct it automatically. The Restart temperature sensor's `restore_status` attribute explains whether the checkpoint was restored, absent, waiting or discarded. The live loop uses bounded memory and does not query Recorder.
 
 ## Development
 

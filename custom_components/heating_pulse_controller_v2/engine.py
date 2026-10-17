@@ -535,6 +535,106 @@ class Controller:
             "lags": list(self.lags),
         }
 
+    def cooling_checkpoint(self, now: float) -> dict | None:
+        """Snapshot confirmed cooling at clean shutdown after valve closure.
+
+        Never persist an opening permission or an unfinished peak observation.
+        """
+        if (
+            self.fault
+            or self.wants_open
+            or self._window_active
+            or self.closed_at is not None
+            or self.peak is None
+            or self.restart_temperature is None
+            or self.cooling_fraction_used is None
+            or self.room is None
+            or self.radiator is None
+            or now - self.room.at > self.settings.room_timeout
+            or now - self.radiator.at > self.settings.radiator_timeout
+        ):
+            return None
+        return {
+            "saved_at": now,
+            "restart_temperature": self.restart_temperature,
+            "peak": asdict(self.peak),
+            "cooling_fraction": self.cooling_fraction_used,
+            "room": asdict(self.room),
+            "radiator": asdict(self.radiator),
+        }
+
+    def restore_cooling(self, checkpoint: dict, now: float) -> bool:
+        """Validate against fresh reports; restore the gate, never demand or an open pulse."""
+        if (
+            self.fault
+            or self.wants_open
+            or self._window_active
+            or not self.room
+            or not self.radiator
+        ):
+            return False
+        try:
+            saved = checkpoint["saved_at"]
+            gate = checkpoint["restart_temperature"]
+            fraction = checkpoint["cooling_fraction"]
+            peak, room, rad = (Sample(**checkpoint[key]) for key in ("peak", "room", "radiator"))
+            values = [
+                saved,
+                gate,
+                fraction,
+                peak.at,
+                peak.value,
+                room.at,
+                room.value,
+                rad.at,
+                rad.value,
+            ]
+            if any(isinstance(v, bool) or not math.isfinite(v) for v in values):
+                return False
+            if not 0 <= now - saved <= self.settings.radiator_timeout:
+                return False
+            if not peak.at <= rad.at <= saved or not room.at <= saved:
+                return False
+            if (
+                saved - rad.at > self.settings.radiator_timeout
+                or saved - room.at > self.settings.room_timeout
+            ):
+                return False
+            if not all(-40 <= v <= 120 for v in (gate, peak.value, room.value, rad.value)):
+                return False
+            if (
+                not self.settings.cooling_fraction
+                <= fraction
+                <= (
+                    self.settings.cooling_fraction_max
+                    if self.settings.adaptive_cooling
+                    else self.settings.cooling_fraction
+                )
+            ):
+                return False
+            if gate > peak.value or rad.value > peak.value:
+                return False
+            if self.room.at <= saved or self.radiator.at <= saved:
+                return False
+            if (
+                now - self.room.at > self.settings.room_timeout
+                or now - self.radiator.at > self.settings.radiator_timeout
+            ):
+                return False
+            # Warming during the blind interval contradicts a closed cooling
+            # episode. A changed room temperature alone does not move its frozen gate.
+            if self.radiator.value > rad.value + self.settings.peak_drop:
+                return False
+        except KeyError, TypeError, ValueError, OverflowError:
+            return False
+        self._discard_episode()
+        self.restart_temperature = gate
+        self.peak = peak
+        self.cooling_fraction_used = fraction
+        self.reason = "cooling_restored"
+        # Recheck today's radiator against the gate, not an old ready-to-open latch.
+        return True
+
     def restore(self, data: dict, now: float) -> bool:
         """Restore calibration only. Fail closed on malformed/incompatible storage."""
         self.reset_reference()

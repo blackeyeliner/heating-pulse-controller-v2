@@ -20,8 +20,10 @@ from homeassistant.helpers.storage import Store
 
 from .actuator import SonoffActuator
 from .const import (
+    CONF_CLOSE_VALUE,
     CONF_CLOSING,
     CONF_GUARDS,
+    CONF_OPEN_VALUE,
     CONF_OPENING,
     CONF_RADIATOR,
     CONF_REPORTS,
@@ -65,6 +67,24 @@ class Runtime:
         self._window_close_error = None
         self._window_close_reason = None
         self._window_deadline_cancel = None
+        self._pending_cooling = None
+        self._cooling_restore_status = "not_saved"
+
+    def _cooling_context(self):
+        return {
+            key: self.config.get(key)
+            for key in (
+                CONF_ROOM,
+                CONF_RADIATOR,
+                CONF_THERMOSTAT,
+                CONF_TRV,
+                CONF_OPENING,
+                CONF_CLOSING,
+                CONF_OPEN_VALUE,
+                CONF_CLOSE_VALUE,
+                CONF_WINDOW,
+            )
+        }
 
     def now(self) -> float:
         return self._wall + time.monotonic() - self._monotonic
@@ -72,7 +92,16 @@ class Runtime:
     async def start(self):
         stored = await self.store.async_load()
         if stored:
-            self.engine.restore(stored, self.now())
+            restored = self.engine.restore(stored, self.now())
+            if isinstance(stored, dict) and stored.get("cooling") is not None:
+                if restored and stored.get("cooling_context") == self._cooling_context():
+                    self._pending_cooling = stored["cooling"]
+                    self._cooling_restore_status = "waiting_for_fresh_reports"
+                else:
+                    self._cooling_restore_status = "incompatible"
+                # Consume the clean-stop checkpoint before subscribing. A crash
+                # in this session must never resurrect the previous episode.
+                await self.store.async_save(self.engine.dump())
         # No initial state snapshot is passed off as a fresh report.
         watched = (
             self._sensor_ids + [self.config[CONF_THERMOSTAT]] + self.config.get(CONF_GUARDS, [])
@@ -277,6 +306,42 @@ class Runtime:
             )
         )
 
+    def _restore_cooling_if_ready(self):
+        checkpoint = self._pending_cooling
+        if checkpoint is None:
+            return
+        now = self.now()
+        try:
+            age = now - checkpoint["saved_at"]
+            valid_age = math.isfinite(age) and 0 <= age <= self.engine.settings.radiator_timeout
+        except TypeError, KeyError:
+            valid_age = False
+        if not valid_age or self._window_open() is True or self.engine.fault:
+            self._pending_cooling = None
+            self._cooling_restore_status = "discarded"
+            return
+        if self._window_open() is None or not self.engine.room or not self.engine.radiator:
+            return
+        for key, expected in ((CONF_OPENING, 0), (CONF_CLOSING, 100)):
+            state = self.hass.states.get(self.config[key])
+            if state is None or state.state in ("unknown", "unavailable"):
+                return
+            try:
+                closed = float(state.state) == expected
+            except TypeError, ValueError:
+                closed = False
+            if not closed:
+                self._pending_cooling = None
+                self._cooling_restore_status = "valve_not_closed"
+                return
+        self._pending_cooling = None
+        # Unknown window feedback at startup may have selected the waiting mode;
+        # reconcile confirmed closure before applying the saved episode.
+        self.engine.evaluate(now, enabled=False, heat_mode=False, target=20, window_open=False)
+        self._cooling_restore_status = (
+            "restored" if self.engine.restore_cooling(checkpoint, now) else "discarded"
+        )
+
     async def _process(self):
         async with self._lock:
             if self._closed:
@@ -284,6 +349,7 @@ class Runtime:
             now = self.now()
             before = self.engine.revision
             previous = (self.engine.phase, self.engine.reason)
+            self._restore_cooling_if_ready()
             mode, target = self._inputs()
             if self.enabled and not self._guards_clear():
                 self.engine.trip("legacy_controller_enabled", now)
@@ -408,7 +474,17 @@ class Runtime:
                     target=20,
                     window_open=self._window_open(),
                 )
-                await self.store.async_save(self.engine.dump())
+                stored = self.engine.dump()
+                if (
+                    self._owned
+                    and self.actuator.commanded_open is False
+                    and self._window_open() is False
+                ):
+                    checkpoint = self.engine.cooling_checkpoint(self.now())
+                    if checkpoint:
+                        stored["cooling"] = checkpoint
+                        stored["cooling_context"] = self._cooling_context()
+                await self.store.async_save(stored)
         pending = [task for task in self._tasks if task is not asyncio.current_task()]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
@@ -421,6 +497,7 @@ class Runtime:
             "enabled": self.enabled,
             "commanded_open": self.actuator.commanded_open,
             "reporting_verified": self.config.get(CONF_REPORTS, False),
+            "cooling_restore_status": self._cooling_restore_status,
             "window_status": (
                 self._window_close_error
                 or self._window_close_reason

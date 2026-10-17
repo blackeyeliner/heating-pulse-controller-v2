@@ -168,3 +168,47 @@ async def test_optional_window_entities_and_options_removal(hass, config, device
     assert not entry.runtime_data.enabled
     assert devices == []
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_real_reload_preserves_confirmed_cooling_gate(hass, config, devices, monkeypatch):
+    from test_cooling_restore import cooled_controller
+    from test_runtime import fresh
+
+    from custom_components.heating_pulse_controller_v2.runtime import Runtime
+
+    clock = [125.0]
+    monkeypatch.setattr(Runtime, "now", lambda self: clock[0])
+    await setup_hass(hass)
+    entry = ConfigEntry(
+        version=1,
+        minor_version=1,
+        domain=DOMAIN,
+        title="Cooling pilot",
+        data={**config, **asdict(Settings())},
+        options={},
+        source="user",
+        unique_id=config["trv"],
+        discovery_keys=MappingProxyType({}),
+        subentries_data=[],
+    )
+    await hass.config_entries.async_add(entry)
+    await hass.async_block_till_done()
+    old = entry.runtime_data
+    old.engine = cooled_controller()
+    old._owned = True
+    old.actuator.commanded_open = False
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    new = entry.runtime_data
+    assert new is not old and not new.enabled
+    assert new.diagnostics()["cooling_restore_status"] == "waiting_for_fresh_reports"
+    clock[0] = 160
+    hass.states.async_set("sensor.radiator", 28, {"unit_of_measurement": "°C"})
+    await fresh(hass)
+    gate = hass.states.get("sensor.cooling_pilot_restart_temperature")
+    assert float(gate.state) == 29
+    assert gate.attributes["restore_status"] == "restored"
+    assert not new.enabled
+    await new.set_enabled(True)
+    assert new.actuator.commanded_open
+    await hass.config_entries.async_unload(entry.entry_id)
