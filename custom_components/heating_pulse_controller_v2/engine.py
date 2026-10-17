@@ -154,6 +154,7 @@ class Controller:
         self._window_active = False
         self._window_next_open = 0.0
         self._window_deadline = 0.0
+        self._pulse_exposed = False
 
     @property
     def wants_open(self) -> bool:
@@ -244,18 +245,14 @@ class Controller:
         exposed = window_open is not False
         window_changed = exposed != self._window_active
         if window_changed:
-            self._discard_episode()
-            self._window_active = exposed
-            self._window_next_open = now + PWM_CLOSED_SECONDS
-            self.phase = Phase.WINDOW_PAUSE if exposed else Phase.COOLING
-            self.reason = "window_open" if exposed else "window_closed"
+            self._switch_window(now, exposed)
 
         if not enabled or not heat_mode:
-            if self._window_active:
-                self._discard_episode()
-                self._window_next_open = now + PWM_CLOSED_SECONDS
-            elif self.wants_open:
-                self._close(now, "disabled" if not enabled else "thermostat_off")
+            if self.wants_open:
+                if self._window_active:
+                    self._close_window(now, "disabled" if not enabled else "thermostat_off")
+                else:
+                    self._close(now, "disabled" if not enabled else "thermostat_off")
             if not self._window_active:
                 self._cool(now, fresh_report)
             self._demand = False
@@ -277,18 +274,15 @@ class Controller:
             self.trip("stale_radiator_temperature", now)
             return
 
-        if exposed:
-            self._window(now, target, window_open)
-            return
-        if window_changed:
-            # Always send the close before returning to normal control next tick.
-            return
-
         error = target - self.room.value
         if error > self.settings.start_error:
             self._demand = True
         elif error <= self.settings.stop_error:
             self._demand = False
+
+        if exposed:
+            self._window(now, target, window_open, fresh_report)
+            return
 
         if self.wants_open:
             if not self._demand:
@@ -333,6 +327,7 @@ class Controller:
         # Calibration must bypass a stale cutoff, including a colder current reference.
         self.phase = Phase.CALIBRATING if stale else Phase.HEATING
         self.opened_at = now
+        self._pulse_exposed = False
         self.closed_at = None
         self.reason = "reference_expired" if stale else "room_demand"
         self._trace.clear()
@@ -356,31 +351,83 @@ class Controller:
         self._cooling_required = True
         self._demand = False
 
-    def _window(self, now: float, target: float, window_open: bool | None):
+    def _switch_window(self, now: float, exposed: bool):
+        """Change termination policy without restarting or closing a live pulse."""
+        was_open = self.wants_open
+        self._window_active = exposed
+        self._trace.clear()
+        self._candidate.clear()
+        self._max_slope = 0
+        self.trend = None
+        self._learn_lag = False
+        if exposed and was_open:
+            self._pulse_exposed = True
+            self.phase = Phase.WINDOW_HEATING
+            self._window_deadline = self.opened_at + min(
+                PWM_OPEN_SECONDS, self.settings.max_open_seconds
+            )
+        elif not exposed:
+            self._window_next_open = 0
+            if was_open:
+                stale = (
+                    self.reference is None
+                    or now - self.reference.measured_at >= self.settings.reference_seconds
+                )
+                self.phase = Phase.CALIBRATING if stale else Phase.HEATING
+                self.reason = "window_closed"
+        # An unconfirmed peak exposed to outside air cannot identify thermal lag
+        # or a cooling gate. Preserve an already confirmed gate instead.
+        if not was_open and self.closed_at is not None:
+            self.closed_at = None
+            self.peak = None
+            self.restart_temperature = None
+            self.cooling_fraction_used = None
+            self._cooling_required = True
+
+    def _close_window(self, now: float, reason: str):
+        elapsed = max(0, now - self.opened_at)
+        self._close(now, reason)
+        self._window_next_open = now + max(PWM_CLOSED_SECONDS, 4 * elapsed)
+        self.phase = Phase.WINDOW_PAUSE
+        self.opened_at = None
+
+    def _window(self, now: float, target: float, window_open: bool | None, fresh_report: bool):
         reason = (
             "window_unavailable"
             if window_open is None
             else cold_reason(self.room.value, self.radiator.value)
         )
-        if reason:
-            self._window_next_open = now + PWM_CLOSED_SECONDS
-        elif target - self.room.value <= self.settings.stop_error:
+        if reason is None and not self._demand:
             reason = "window_room_satisfied"
-        elif self.phase == Phase.WINDOW_HEATING and now < self._window_deadline:
-            return
-        elif self.phase != Phase.WINDOW_HEATING and now >= self._window_next_open:
-            self.phase = Phase.WINDOW_HEATING
-            self.reason = "window_pwm"
-            self.opened_at = now
-            self._window_deadline = now + min(PWM_OPEN_SECONDS, self.settings.max_open_seconds)
-            return
         if self.phase == Phase.WINDOW_HEATING:
-            # Base the next pause on actual closure evaluation, never catch up
-            # missed pulses after a delayed callback.
-            self._window_next_open = now + max(PWM_CLOSED_SECONDS, 4 * (now - self.opened_at))
+            if reason is None and now < self._window_deadline:
+                return
+            self._close_window(now, reason or "window_pwm_pause")
+            return
         self.phase = Phase.WINDOW_PAUSE
-        self.reason = reason or "window_pwm_pause"
-        self.opened_at = None
+        if reason:
+            self.reason = reason
+            return
+        if self._window_next_open:
+            if now < self._window_next_open:
+                self.reason = "window_pwm_pause"
+                return
+            # A completed PWM pause replaces the ordinary cooling gate while
+            # exposed. The next pulse still requires current room demand.
+        else:
+            self._cool(now, fresh_report, target=target)
+            if self._cooling_required:
+                self.reason = "window_cooling"
+                return
+        self.phase = Phase.WINDOW_HEATING
+        self.reason = "window_pwm"
+        self.opened_at = now
+        self.closed_at = None
+        self.peak = None
+        self.restart_temperature = None
+        self.cooling_fraction_used = None
+        self._pulse_exposed = True
+        self._window_deadline = now + min(PWM_OPEN_SECONDS, self.settings.max_open_seconds)
 
     def window_permits_open(self, now: float) -> bool:
         return self.phase == Phase.WINDOW_HEATING and now < self._window_deadline
@@ -455,7 +502,11 @@ class Controller:
         )
 
     def _close(self, now: float, reason: str):
-        self._learn_lag = self.phase == Phase.HEATING and reason == "closing_threshold"
+        self._learn_lag = (
+            self.phase == Phase.HEATING
+            and reason == "closing_threshold"
+            and not self._pulse_exposed
+        )
         self.closed_at = now
         self.peak = Sample(now, self.radiator.value) if self.radiator else None
         self._cooling_required = True

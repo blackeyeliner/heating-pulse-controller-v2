@@ -1,10 +1,10 @@
 # Validation
 
-## Current result: beta 8, 2026-10-17
+## Current result: beta 9, 2026-10-17
 
-Version `0.1.0b8`: **125 tests passed** against HA 2026.9.3 / Python 3.14. Lint, format and deterministic packaging passed locally. Beta 7 also passed both published GitHub CI runs and production `ha core check`; beta 8 deployment results are recorded separately. Five dependency deprecation warnings remain. The historical coverage percentages below are beta 1 measurements, not a current coverage report.
+Version `0.1.0b9`: **138 tests passed** against HA 2026.9.3 / Python 3.14. Lint, format and deterministic packaging passed locally. Beta 7 also passed both published GitHub CI runs and production `ha core check`; beta 8 deployment results are recorded separately. Five dependency deprecation warnings remain. The historical coverage percentages below are beta 1 measurements, not a current coverage report.
 
-Beta 8 changes the window period to up to 10 minutes open / at least 40 minutes closed, retaining 20% nominal maximum duty and the initial closed interval. Tests span three full periods and verify the HA actuator stays open beyond two minutes, closes at ten minutes, and waits forty minutes before reopening.
+Beta 9 supersedes the beta 8 initial-pause behaviour. Window transitions preserve live valve openings and their original timestamp, switch between ten-minute timed and ordinary termination, and impose forty minutes closed only after timed closure. Tests verify both in-place transitions, first-pulse normal readiness, demand hysteresis, late exposure, fresh-only plateau learning and actual HA actuator call continuity. The dated vault record contains the completed beta 9 validation and activation result.
 
 The suite now also covers adaptive cooling, numeric Reference age, window PWM and cold-closure handling, opening interlocks, and confirmed cooling checkpoint persistence. A real HA config-entry reload using its actual Store restores a 29 °C gate and permits fresh room demand at radiator 28 °C after explicit enable. Invalid/old/warming observations, changed settings or bindings, unknown feedback, open windows and failed final closure reject or defer restoration as appropriate. Hardware services remain simulated in these tests.
 

@@ -961,7 +961,7 @@ wheels = [
 
 [[package]]
 name = "heating-pulse-controller-v2"
-version = "0.1.0b8"
+version = "0.1.0b9"
 source = { virtual = "." }
 
 [package.dev-dependencies]

@@ -283,6 +283,14 @@ class Runtime:
         room = self.engine.room
         rad = self.engine.radiator
         now = self.now()
+        # Cover feedback can change between awaited actuator service calls.
+        # Reconcile the policy inside the same serial owner before deciding
+        # whether that in-flight opening is still permitted.
+        window = self._window_open()
+        if (window is not False) != self.engine._window_active:
+            self.engine.evaluate(
+                now, enabled=self.enabled, heat_mode=mode, target=target, window_open=window
+            )
         return (
             not self._closed
             and self.enabled
