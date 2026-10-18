@@ -652,6 +652,8 @@ class Controller:
                 else None
             )
             cold = cold_reason(room, rad)
+        if self._recovery_reason == "window_close_failed":
+            cold = None  # Failed window closure must not also remove maintenance heat.
         if self.phase == Phase.RECOVERY_HEATING:
             if now >= self._recovery_deadline or not self._demand or cold:
                 self._close_recovery(now, cold or "recovery_pwm_pause")

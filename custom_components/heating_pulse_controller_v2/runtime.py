@@ -386,6 +386,8 @@ class Runtime:
             _LOGGER.warning("%s: emergency window close (%s)", self.entry.title, reason)
         except HomeAssistantError, TimeoutError:
             self._window_close_error = "window_close_failed"
+            if not self.engine.fault:
+                self.engine.trip("window_close_failed", now)
             _LOGGER.exception("Emergency window close failed for %s", self.entry.title)
 
     def _permitted(self):
@@ -397,7 +399,7 @@ class Runtime:
             heat_mode=mode,
             target=target,
             window_open=self._window_open(),
-            input_error=self._input_error,
+            input_error=self._window_close_error or self._input_error,
         )
         common = (
             not self._closed
@@ -485,7 +487,7 @@ class Runtime:
                 heat_mode=mode,
                 target=target,
                 window_open=self._window_open(),
-                input_error=self._input_error,
+                input_error=self._window_close_error or self._input_error,
             )
             if self.enabled and not self._guards_clear():
                 self.engine.reason = "legacy_controller_enabled"

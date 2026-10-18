@@ -177,3 +177,43 @@ async def test_runtime_clean_reload_retains_timeout_without_confirmed_peak(hass,
     await d.set_enabled(True)
     assert d.engine.phase == Phase.RECOVERY_PAUSE and not d.actuator.commanded_open
     await d.stop()
+
+
+async def test_history_helper_failure_is_not_a_valve_fault(hass, entry, devices):
+    from homeassistant.exceptions import HomeAssistantError
+
+    async def fail(call):
+        raise HomeAssistantError("history helper missing")
+
+    hass.services.async_register("input_number", "set_value", fail)
+    r = Runtime(hass, entry)
+    await r.start()
+    await fresh(hass)
+    await r.set_enabled(True)
+    assert r.actuator.commanded_open and r.engine.fault is None
+    await r.stop()
+    assert r.actuator.commanded_open is False and r.engine.fault is None
+
+
+async def test_failed_window_closure_keeps_maintenance_heat(hass, entry, devices):
+    from homeassistant.exceptions import HomeAssistantError
+
+    entry.options = {"window_cover": "cover.window"}
+    hass.states.async_set("cover.window", "open")
+
+    async def fail(call):
+        raise HomeAssistantError("window motor offline")
+
+    hass.services.async_register("cover", "close_cover", fail)
+    r = Runtime(hass, entry)
+    await r.start()
+    await fresh(hass)
+    await r.set_enabled(True)
+    hass.states.async_set("sensor.room", 15, {"unit_of_measurement": "°C"})
+    await hass.async_block_till_done()
+    await r._process()
+    assert r.engine.fault is None and r.enabled
+    assert r.engine._recovery_reason == "window_close_failed"
+    assert r.actuator.commanded_open
+    assert r.engine.window_deadline - r.engine.opened_at == 900
+    await r.stop()

@@ -41,14 +41,17 @@ class SonoffActuator:
 
     async def _mirror(self, value: int):
         if self.config.get(CONF_OUTPUT):
-            await self._call(
-                "input_number",
-                "set_value",
-                {
-                    "entity_id": self.config[CONF_OUTPUT],
-                    "value": value,
-                },
-            )
+            try:
+                await self._call(
+                    "input_number",
+                    "set_value",
+                    {
+                        "entity_id": self.config[CONF_OUTPUT],
+                        "value": value,
+                    },
+                )
+            except HomeAssistantError, TimeoutError:
+                _LOGGER.warning("Valve history helper update failed; valve delivery is unaffected")
 
     async def close(self):
         """Try both closing commands even if one fails. Never claim physical proof."""
