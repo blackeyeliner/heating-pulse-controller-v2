@@ -360,3 +360,55 @@ async def test_hung_transport_probe_is_bounded_and_keeps_retry_spacing(
     await r._process()
     assert r.actuator.probe.await_count == 1
     await r.stop()
+
+
+async def test_confirmed_failure_disables_only_its_own_room(hass, entry, devices):
+    from types import SimpleNamespace
+
+    pushes = await configured(hass, entry)
+    first, clock = await running(hass, entry)
+    # A genuinely distinct actuator/room, sharing only the emergency AC list.
+    other_config = dict(entry.data)
+    for key in [
+        "room_sensor",
+        "radiator_sensor",
+        "thermostat",
+        "trv",
+        "opening_entity",
+        "closing_entity",
+        "output_helper",
+    ]:
+        original = entry.data[key]
+        domain, name = original.split(".", 1)
+        other = domain + ".other_" + name
+        state = hass.states.get(original)
+        hass.states.async_set(other, state.state, state.attributes)
+        other_config[key] = other
+    other_entry = SimpleNamespace(
+        entry_id="other_room", title="Other room", data=other_config, options=entry.options
+    )
+    second = Runtime(hass, other_entry)
+    second.now = lambda: clock[0]
+    await second.start()
+    for key in ["room_sensor", "radiator_sensor"]:
+        entity = other_config[key]
+        state = hass.states.get(entity)
+        hass.states.async_set(entity, state.state, state.attributes, force_update=True)
+    await hass.async_block_till_done()
+    await second.set_enabled(True)
+    assert second.enabled and second.actuator.commanded_open
+    await failed_close(first)
+    for _ in range(10):
+        clock[0] += 60
+        for key in ["room_sensor", "radiator_sensor"]:
+            entity = other_config[key]
+            state = hass.states.get(entity)
+            hass.states.async_set(entity, state.state, state.attributes, force_update=True)
+        await first._process()
+        await hass.async_block_till_done()
+    assert first.engine.fault == "actuator_error" and not first.enabled
+    assert second.enabled and second.engine.fault is None
+    assert second.actuator.commanded_open and not second.emergency.active
+    assert not second.reconnect.active and len(pushes) == 1
+    await first.stop()
+    await second.stop()
