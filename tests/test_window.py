@@ -22,9 +22,9 @@ def test_pwm_starts_when_ready_and_never_learns_from_exposed_surface():
     c = Controller()
     valid_reference(c)
     before = c.dump()
-    for at in range(0, 9001, 10):
+    for at in range(0, 10801, 10):
         tick(c, at, rad=20)
-        assert c.wants_open == (at % 3000 < 600)
+        assert c.wants_open == (at % 3600 < 900)
         assert not c.fault
     assert c.dump() == before
     assert c.trend is None and not c._trace
@@ -33,11 +33,11 @@ def test_pwm_starts_when_ready_and_never_learns_from_exposed_surface():
 def test_delayed_callback_extends_pause_instead_of_catching_up():
     c = Controller()
     tick(c, 0, rad=20)
-    tick(c, 620)
+    tick(c, 920)
     assert not c.wants_open
-    tick(c, 3020)
+    tick(c, 3620)
     assert not c.wants_open
-    tick(c, 3100)
+    tick(c, 3680)
     assert c.wants_open
 
 
@@ -47,7 +47,7 @@ def test_open_window_preserves_live_calibration_then_close_restarts_clean_trace(
     assert c.phase == Phase.CALIBRATING
     tick(c, 30, rad=30)
     assert c.wants_open and c.reference is None and c.opened_at == 0
-    assert c.window_deadline == 600
+    assert c.window_deadline == 900
     assert not c._trace
     tick(c, 100, window=False, rad=30)
     assert c.phase == Phase.CALIBRATING and c.opened_at == 0
@@ -56,16 +56,16 @@ def test_open_window_preserves_live_calibration_then_close_restarts_clean_trace(
     assert c._trace[0].at == 110
 
 
-@pytest.mark.parametrize("opened_for,expected", [(100, True), (600, False), (700, False)])
+@pytest.mark.parametrize("opened_for,expected", [(100, True), (900, False), (1000, False)])
 def test_window_open_uses_existing_pulse_origin(opened_for, expected):
     c = Controller()
     tick(c, 0, window=False, rad=20)
     tick(c, opened_for, rad=25)
     assert c.wants_open is expected
     if expected:
-        assert c.opened_at == 0 and c.window_deadline == 600
+        assert c.opened_at == 0 and c.window_deadline == 900
     else:
-        assert c._window_next_open == opened_for + max(2400, 4 * opened_for)
+        assert c._window_next_open == opened_for + max(2700, 3 * opened_for)
 
 
 def test_opening_window_while_closed_preserves_confirmed_cooling_gate():
@@ -93,23 +93,23 @@ def test_closing_window_mid_pwm_uses_saved_cutoff_without_extra_close():
 def test_closing_window_mid_pause_cancels_timer_and_uses_normal_cooling():
     c = Controller()
     tick(c, 0, rad=20)
-    tick(c, 600, rad=30)
+    tick(c, 900, rad=30)
     assert not c.wants_open
-    tick(c, 700, window=False, rad=25)
+    tick(c, 1000, window=False, rad=25)
     assert not c.wants_open and c._window_next_open == 0
-    tick(c, 730, window=False, rad=20)
+    tick(c, 1030, window=False, rad=20)
     assert c.phase == Phase.CALIBRATING
 
 
 def test_window_pwm_repetition_requires_latched_room_demand():
     c = Controller()
     tick(c, 0, rad=20)
-    tick(c, 600, rad=30)
-    tick(c, 3000, room=24, rad=25)
+    tick(c, 900, rad=30)
+    tick(c, 3600, room=24, rad=25)
     assert not c.wants_open
-    tick(c, 3030, room=23.8, rad=25)
+    tick(c, 3630, room=23.8, rad=25)
     assert not c.wants_open  # start hysteresis is shared with normal heating
-    tick(c, 3060, room=23.7, rad=25)
+    tick(c, 3660, room=23.7, rad=25)
     assert c.wants_open
 
 
@@ -126,9 +126,7 @@ def test_cold_boundaries_stop_pwm(room, rad, reason):
     assert c.reference is None and not c.fault
 
 
-@pytest.mark.parametrize(
-    "kwargs", [{"enabled": False}, {"heat": False}, {"room": 24}, {"window": None}]
-)
+@pytest.mark.parametrize("kwargs", [{"enabled": False}, {"heat": False}, {"room": 24}])
 def test_pwm_inhibitions(kwargs):
     c = Controller()
     tick(c, 0, rad=20)
@@ -223,11 +221,11 @@ async def test_window_protection_works_during_heating_fault_but_not_when_disable
     await r.start()
     await fresh(hass)
     await r.set_enabled(True)
-    r.engine.trip("maximum_open_duration", r.now())
+    r.engine.trip("actuator_error", r.now())
     hass.states.async_set("sensor.room", 16, {"unit_of_measurement": "°C"})
     await hass.async_block_till_done()
     assert len(calls) == 1
-    assert r.engine.fault == "maximum_open_duration"
+    assert r.engine.fault == "actuator_error"
     assert r.diagnostics()["window_status"] == "window_close_failed"
     await r._process()
     assert len(calls) == 1  # No command storm on the 5-second timer.
@@ -292,7 +290,7 @@ async def test_live_pwm_closes_by_deadline_and_unavailable_cover_inhibits(hass, 
     assert r.actuator.commanded_open
     assert r.window_opening_allowed()
     assert r._window_deadline_cancel is not None
-    for _ in range(9):
+    for _ in range(14):
         clock[0] += 60
         await fresh(hass)
         await r._process()
@@ -302,15 +300,15 @@ async def test_live_pwm_closes_by_deadline_and_unavailable_cover_inhibits(hass, 
     await r._process()
     assert r.actuator.commanded_open is False
     assert r._window_deadline_cancel is None
-    for _ in range(40):
+    for _ in range(45):
         clock[0] += 60
         await fresh(hass)
         await r._process()
     assert r.actuator.commanded_open
     hass.states.async_set("cover.window", "unavailable")
     await hass.async_block_till_done()
-    assert r.actuator.commanded_open is False
-    assert r.engine.reason == "window_unavailable"
+    assert r.actuator.commanded_open is True
+    assert r.engine._recovery_reason == "window_unavailable"
     await r.stop()
 
 
@@ -356,11 +354,11 @@ def test_plateau_learning_resumes_only_from_post_closure_samples():
 def test_window_toggling_does_not_reset_open_duration_or_maximum_limit():
     c = Controller()
     tick(c, 0, rad=20)
-    tick(c, 590, window=False, rad=25)
+    tick(c, 890, window=False, rad=25)
     assert c.wants_open and c.opened_at == 0
-    tick(c, 599, rad=25)
-    assert c.wants_open and c.window_deadline == 600
-    tick(c, 600, rad=25)
+    tick(c, 899, rad=25)
+    assert c.wants_open and c.window_deadline == 900
+    tick(c, 900, rad=25)
     assert not c.wants_open
 
 
@@ -381,7 +379,7 @@ async def test_runtime_window_transitions_keep_valve_open_and_cancel_pwm_deadlin
     hass.states.async_set("cover.window", "open")
     await hass.async_block_till_done()
     assert r.engine.phase == Phase.WINDOW_HEATING
-    assert r.engine.window_deadline == original_open + 600
+    assert r.engine.window_deadline == original_open + 900
     assert r.actuator.commanded_open and len(devices) == calls_before
     assert r._window_deadline_cancel is not None
     clock[0] += 60
@@ -404,4 +402,6 @@ def test_original_maximum_open_limit_survives_window_changes(close_window):
     assert c.wants_open
     tick(c, 420, window=not close_window, rad=25)
     assert not c.wants_open
-    assert c.fault == ("maximum_open_duration" if close_window else None)
+    assert c.fault is None
+    if close_window:
+        assert c._recovery_reason == "maximum_open_duration"

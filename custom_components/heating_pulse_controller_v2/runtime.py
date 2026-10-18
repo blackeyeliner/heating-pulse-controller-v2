@@ -4,7 +4,7 @@ import asyncio
 import logging
 import math
 import time
-from dataclasses import asdict, fields
+from dataclasses import fields
 from datetime import timedelta
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, UnitOfTemperature
@@ -70,6 +70,9 @@ class Runtime:
         self._pending_cooling = None
         self._restart_gate = None
         self._pending_gate = None
+        self._input_error = None
+        self._last_heat_mode = False
+        self._last_target = math.nan
         self._started_at = self.now()
         self._cooling_restore_status = "not_saved"
 
@@ -177,7 +180,7 @@ class Runtime:
             restored = self.engine.restore(stored, self.now())
             if isinstance(stored, dict) and stored.get("restart_gate") is not None:
                 if (
-                    stored.get("settings") == asdict(self.engine.settings)
+                    self.engine.settings_compatible(stored.get("settings"))
                     and stored.get("restart_gate_context") == self._cooling_context()
                     and self._valid_gate(stored["restart_gate"])
                 ):
@@ -288,11 +291,25 @@ class Runtime:
 
     def _inputs(self):
         thermostat = self.hass.states.get(self.config[CONF_THERMOSTAT])
+        known_mode = bool(thermostat and thermostat.state in {"heat", "off"})
+        if known_mode:
+            self._last_heat_mode = thermostat.state == "heat"
         try:
             target = float(thermostat.attributes["temperature"])
+            valid_target = math.isfinite(target) and 4 <= target <= 35
         except TypeError, ValueError, AttributeError, KeyError:
-            target = math.nan
-        return bool(thermostat and thermostat.state == "heat"), target
+            valid_target = False
+        if valid_target:
+            self._last_target = target
+        self._input_error = None if known_mode and valid_target else "thermostat_unavailable"
+        return self._last_heat_mode, self._last_target
+
+    def _actuator_available(self):
+        return all(
+            (s := self.hass.states.get(self.config[k])) is not None
+            and s.state not in {"unknown", "unavailable"}
+            for k in (CONF_TRV, CONF_OPENING, CONF_CLOSING)
+        )
 
     def _guards_clear(self):
         return all(
@@ -373,31 +390,36 @@ class Runtime:
 
     def _permitted(self):
         mode, target = self._inputs()
-        room = self.engine.room
-        rad = self.engine.radiator
         now = self.now()
-        # Cover feedback can change between awaited actuator service calls.
-        # Reconcile the policy inside the same serial owner before deciding
-        # whether that in-flight opening is still permitted.
-        window = self._window_open()
-        if (window is not False) != self.engine._window_active:
-            self.engine.evaluate(
-                now, enabled=self.enabled, heat_mode=mode, target=target, window_open=window
-            )
-        return (
+        self.engine.evaluate(
+            now,
+            enabled=self.enabled and self._guards_clear(),
+            heat_mode=mode,
+            target=target,
+            window_open=self._window_open(),
+            input_error=self._input_error,
+        )
+        common = (
             not self._closed
             and self.enabled
             and not self.engine.fault
             and mode
             and math.isfinite(target)
             and self._guards_clear()
+            and self._actuator_available()
+            and self.engine.opened_at is not None
+            and now - self.engine.opened_at < self.engine.settings.max_open_seconds
+        )
+        if self.engine.recovery_permits_open(now):
+            return common
+        room, rad = self.engine.room, self.engine.radiator
+        return (
+            common
             and room is not None
             and rad is not None
             and target - room.value > self.engine.settings.stop_error
             and now - room.at <= self.engine.settings.room_timeout
             and now - rad.at <= self.engine.settings.radiator_timeout
-            and self.engine.opened_at is not None
-            and now - self.engine.opened_at < self.engine.settings.max_open_seconds
             and (
                 self._window_open() is False
                 and not self.engine._window_active
@@ -454,15 +476,19 @@ class Runtime:
             self._restore_gate_if_ready()
             gate_before = self._restart_gate
             mode, target = self._inputs()
-            if self.enabled and not self._guards_clear():
-                self.engine.trip("legacy_controller_enabled", now)
+            if self.enabled and not self._actuator_available():
+                self.engine.trip("actuator_error", now)
+                self.enabled = False
             self.engine.evaluate(
                 self.now(),
-                enabled=self.enabled,
+                enabled=self.enabled and self._guards_clear(),
                 heat_mode=mode,
                 target=target,
                 window_open=self._window_open(),
+                input_error=self._input_error,
             )
+            if self.enabled and not self._guards_clear():
+                self.engine.reason = "legacy_controller_enabled"
             await self._protect_window()
             if self._owned:
                 try:
@@ -506,19 +532,14 @@ class Runtime:
                 if self.engine.fault:
                     raise HomeAssistantError("Reset the controller fault before enabling")
                 now = self.now()
-                if (
-                    not self.engine.room
-                    or not self.engine.radiator
-                    or now - self.engine.room.at > self.engine.settings.room_timeout
-                    or now - self.engine.radiator.at > self.engine.settings.radiator_timeout
-                ):
-                    raise HomeAssistantError(
-                        "Waiting for fresh reports from both temperature sensors"
-                    )
-                for key in (CONF_TRV, CONF_OPENING, CONF_CLOSING, CONF_THERMOSTAT):
+                _, target = self._inputs()
+                if not math.isfinite(target):
+                    raise HomeAssistantError("Waiting for a valid thermostat setpoint")
+                for key in (CONF_TRV, CONF_OPENING, CONF_CLOSING):
                     state = self.hass.states.get(self.config[key])
                     if state is None or state.state in ("unknown", "unavailable"):
-                        raise HomeAssistantError(f"Unavailable entity: {self.config[key]}")
+                        self.engine.trip("actuator_error", now)
+                        raise HomeAssistantError(f"Unavailable valve entity: {self.config[key]}")
                 self._owned = True
                 try:
                     await self.actuator.close()

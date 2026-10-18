@@ -28,13 +28,12 @@ async def test_setup_is_passive_and_fresh_equal_reports_count(hass, entry, devic
     assert devices == []
 
 
-async def test_enable_requires_new_reports_then_opens_only_minimum(hass, entry, devices):
+async def test_explicit_enable_without_reports_uses_timed_minimum_heat(hass, entry, devices):
     r = Runtime(hass, entry)
     await r.start()
-    with pytest.raises(HomeAssistantError, match="fresh"):
-        await r.set_enabled(True)
-    await fresh(hass)
     await r.set_enabled(True)
+    assert r.engine._recovery_reason == "missing_temperature"
+    await fresh(hass)
     await hass.async_block_till_done()
     assert r.actuator.commanded_open
     assert hass.states.get("number.opening").state == "21"
@@ -56,7 +55,8 @@ async def test_legacy_guard_prevents_enable_and_stops_live_control(hass, entry, 
     await r.set_enabled(True)
     hass.states.async_set("automation.old_controller", "on")
     await hass.async_block_till_done()
-    assert r.engine.fault == "legacy_controller_enabled"
+    assert r.engine.fault is None
+    assert r.engine.reason == "legacy_controller_enabled"
     assert r.actuator.commanded_open is False
     await r.stop()
 

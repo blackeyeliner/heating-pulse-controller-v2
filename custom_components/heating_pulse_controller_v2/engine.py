@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from statistics import median
 
-from .window import PWM_CLOSED_SECONDS, PWM_OPEN_SECONDS, cold_reason
+from .window import PWM_CLOSED_SECONDS, PWM_OFF_RATIO, PWM_OPEN_SECONDS, cold_reason
 
 
 class Phase(StrEnum):
@@ -23,6 +23,8 @@ class Phase(StrEnum):
     FAULT = "fault"
     WINDOW_PAUSE = "window_pause"
     WINDOW_HEATING = "window_heating"
+    RECOVERY_HEATING = "recovery_heating"
+    RECOVERY_PAUSE = "recovery_pause"
 
 
 @dataclass(frozen=True)
@@ -50,7 +52,7 @@ class Settings:
     max_sample_gap: float = 120
     radiator_timeout: float = 180
     room_timeout: float = 1800
-    max_open_seconds: float = 900
+    max_open_seconds: float = 1200
     peak_drop: float = 0.2
     peak_confirm_seconds: float = 60
     startup_excess: float = 3
@@ -155,11 +157,20 @@ class Controller:
         self._window_active = False
         self._window_next_open = 0.0
         self._window_deadline = 0.0
+        self._recovery_reason = None
+        self._recovery_next_open = 0.0
+        self._recovery_deadline = 0.0
+        self._retry_calibration = False
         self._pulse_exposed = False
 
     @property
     def wants_open(self) -> bool:
-        return self.phase in (Phase.HEATING, Phase.CALIBRATING, Phase.WINDOW_HEATING)
+        return self.phase in (
+            Phase.HEATING,
+            Phase.CALIBRATING,
+            Phase.WINDOW_HEATING,
+            Phase.RECOVERY_HEATING,
+        )
 
     @property
     def lag(self) -> float:
@@ -234,10 +245,11 @@ class Controller:
         heat_mode: bool,
         target: float,
         window_open: bool | None = False,
+        input_error: str | None = None,
     ):
         if now < self._last_now:
-            self.trip("clock_moved_backwards", self._last_now)
-            return
+            input_error = "clock_moved_backwards"
+            now = self._last_now
         self._last_now = now
         fresh_report = bool(self.radiator and self.radiator.at > self._last_evaluated_report)
         if fresh_report:
@@ -250,7 +262,9 @@ class Controller:
 
         if not enabled or not heat_mode:
             if self.wants_open:
-                if self._window_active:
+                if self._recovery_reason:
+                    self._close_recovery(now, "disabled" if not enabled else "thermostat_off")
+                elif self._window_active:
                     self._close_window(now, "disabled" if not enabled else "thermostat_off")
                 else:
                     self._close(now, "disabled" if not enabled else "thermostat_off")
@@ -262,24 +276,45 @@ class Controller:
         if self.fault:
             self.phase = Phase.FAULT
             return
+        problem = input_error
         if not math.isfinite(target) or not 4 <= target <= 35:
-            self.trip("invalid_target", now)
-            return
-        if not self.room or not self.radiator:
-            self.trip("missing_temperature", now)
-            return
-        if now - self.room.at > self.settings.room_timeout:
-            self.trip("stale_room_temperature", now)
-            return
-        if now - self.radiator.at > self.settings.radiator_timeout:
-            self.trip("stale_radiator_temperature", now)
-            return
+            problem = problem or "invalid_target"
+        elif not self.room or not self.radiator:
+            problem = problem or "missing_temperature"
+        elif now - self.room.at > self.settings.room_timeout:
+            problem = problem or "stale_room_temperature"
+        elif now - self.radiator.at > self.settings.radiator_timeout:
+            problem = problem or "stale_radiator_temperature"
+        elif window_open is None:
+            problem = problem or "window_unavailable"
 
-        error = target - self.room.value
-        if error > self.settings.start_error:
+        room_fresh = bool(self.room and now - self.room.at <= self.settings.room_timeout)
+        if room_fresh and math.isfinite(target):
+            error = target - self.room.value
+            if error > self.settings.start_error:
+                self._demand = True
+            elif error <= self.settings.stop_error:
+                self._demand = False
+        elif problem:
+            # Room demand cannot be measured: preserve bounded maintenance heat
+            # while heat mode remains requested; never interpret missing as satisfied.
             self._demand = True
-        elif error <= self.settings.stop_error:
-            self._demand = False
+
+        if problem and self._recovery_reason is None:
+            self.trip(problem, now)
+        if self._recovery_reason is not None:
+            if self.phase == Phase.RECOVERY_HEATING or now < self._recovery_next_open or problem:
+                self._recovery(now, problem)
+                return
+            # One complete timed cycle has ended and valid inputs returned.
+            self._recovery_reason = None
+            self._recovery_next_open = 0
+            self.closed_at = None
+            self.peak = None
+            self._cooling_required = False
+            self.phase = Phase.IDLE
+            self.reason = "calibration_retry_ready"
+            self.revision += 1
 
         if exposed:
             self._window(now, target, window_open, fresh_report)
@@ -314,7 +349,8 @@ class Controller:
             self.trip("unusable_calibration", now)
             return
         stale = (
-            self.reference is None
+            self._retry_calibration
+            or self.reference is None
             or now - self.reference.measured_at >= self.settings.reference_seconds
         )
         # A fresh low cutoff must not produce zero-length open/close loops.
@@ -362,6 +398,11 @@ class Controller:
         self._max_slope = 0
         self.trend = None
         self._learn_lag = False
+        if self._recovery_reason is not None:
+            if was_open:
+                self.phase = Phase.RECOVERY_HEATING
+                self._recovery_deadline = self.opened_at + self._recovery_limit()
+            return
         if exposed and was_open:
             self._pulse_exposed = True
             self.phase = Phase.WINDOW_HEATING
@@ -372,7 +413,8 @@ class Controller:
             self._window_next_open = 0
             if was_open:
                 stale = (
-                    self.reference is None
+                    self._retry_calibration
+                    or self.reference is None
                     or now - self.reference.measured_at >= self.settings.reference_seconds
                 )
                 self.phase = Phase.CALIBRATING if stale else Phase.HEATING
@@ -390,7 +432,7 @@ class Controller:
     def _close_window(self, now: float, reason: str):
         elapsed = max(0, now - self.opened_at)
         self._close(now, reason)
-        self._window_next_open = now + max(PWM_CLOSED_SECONDS, 4 * elapsed)
+        self._window_next_open = now + max(PWM_CLOSED_SECONDS, PWM_OFF_RATIO * elapsed)
         self.phase = Phase.WINDOW_PAUSE
         self.opened_at = None
 
@@ -438,6 +480,8 @@ class Controller:
 
     @property
     def window_deadline(self) -> float | None:
+        if self.phase == Phase.RECOVERY_HEATING:
+            return self._recovery_deadline
         return self._window_deadline if self.phase == Phase.WINDOW_HEATING else None
 
     def _plateau(self) -> bool:
@@ -472,6 +516,7 @@ class Controller:
         return len(self._candidate) >= 3 and last.at - self._candidate[0].at >= cfg.plateau_seconds
 
     def _accept_reference(self, now: float):
+        self._retry_calibration = False
         temperature = median(s.value for s in self._candidate)
         # Backtrack the near-plateau segment instead of confusing the trend-window
         # confirmation delay with thermal inertia. The onset is still an estimate.
@@ -566,12 +611,96 @@ class Controller:
         if self.radiator.value <= self.restart_temperature:
             self._cooling_required = False
 
+    def _recovery_limit(self):
+        return (
+            min(self.settings.max_open_seconds, PWM_OPEN_SECONDS)
+            if self._window_active
+            else self.settings.max_open_seconds
+        )
+
+    def _recovery_pause(self):
+        return PWM_CLOSED_SECONDS if self._window_active else 4 * self.settings.max_open_seconds
+
+    def _close_recovery(self, now: float, reason: str):
+        elapsed = max(0, now - self.opened_at)
+        gate, source = self.restart_temperature, self.restart_source
+        self._close(now, reason)
+        self.restart_temperature, self.restart_source = gate, source
+        self.closed_at = None
+        self.peak = None
+        self._learn_lag = False
+        self.opened_at = None
+        self._recovery_next_open = now + max(
+            self._recovery_pause(), (PWM_OFF_RATIO if self._window_active else 4) * elapsed
+        )
+        self.phase = Phase.RECOVERY_PAUSE
+        self.revision += 1
+
+    def _recovery(self, now: float, problem: str | None):
+        if problem:
+            self._recovery_reason = problem
+        cold = None
+        if self._window_active:
+            room = (
+                self.room.value
+                if self.room and now - self.room.at <= self.settings.room_timeout
+                else None
+            )
+            rad = (
+                self.radiator.value
+                if self.radiator and now - self.radiator.at <= self.settings.radiator_timeout
+                else None
+            )
+            cold = cold_reason(room, rad)
+        if self.phase == Phase.RECOVERY_HEATING:
+            if now >= self._recovery_deadline or not self._demand or cold:
+                self._close_recovery(now, cold or "recovery_pwm_pause")
+            return
+        self.phase = Phase.RECOVERY_PAUSE
+        self.reason = cold or self._recovery_reason
+        if now < self._recovery_next_open or not self._demand or cold:
+            return
+        self.phase = Phase.RECOVERY_HEATING
+        self.reason = "recovery_pwm"
+        self.opened_at = now
+        self.closed_at = None
+        self.peak = None
+        self._learn_lag = False
+        self._recovery_deadline = now + self._recovery_limit()
+        self.revision += 1
+
+    def recovery_permits_open(self, now: float):
+        return self.phase == Phase.RECOVERY_HEATING and now < self._recovery_deadline
+
     def trip(self, reason: str, now: float):
-        if self.wants_open:
-            self._close(now, reason)
-        self.fault = reason
+        if reason == "actuator_error":
+            if self.wants_open:
+                self._close(now, reason)
+            self.fault = reason
+            self.reason = reason
+            self.phase = Phase.FAULT
+            return
+        self._recovery_reason = reason
+        self._retry_calibration = True
+        self._trace.clear()
+        self._candidate.clear()
+        self.trend = None
+        self._max_slope = 0
+        self._learn_lag = False
+        if reason == "unusable_calibration":
+            self.reset_reference()
+        if reason == "maximum_open_duration" or (
+            self.closed_at == now and self.opened_at is not None
+        ):
+            self._close_recovery(now, reason)
+        elif self.wants_open:
+            self.phase = Phase.RECOVERY_HEATING
+            self._recovery_deadline = self.opened_at + self._recovery_limit()
+        else:
+            self.phase = Phase.RECOVERY_PAUSE
+            self._recovery_next_open = now
         self.reason = reason
-        self.phase = Phase.FAULT
+        self.revision += 1
 
     def set_restart_gate(self, temperature: float, source: str = "manual"):
         """Set a threshold, never a measured peak or an opening permission."""
@@ -612,6 +741,15 @@ class Controller:
             "settings": asdict(self.settings),
             "reference": asdict(self.reference) if self.reference else None,
             "lags": list(self.lags),
+            "retry_calibration": self._retry_calibration,
+            "recovery": {
+                "reason": self._recovery_reason,
+                "resume_at": self._recovery_deadline + self._recovery_pause()
+                if self.phase == Phase.RECOVERY_HEATING
+                else self._recovery_next_open,
+            }
+            if self._recovery_reason
+            else None,
         }
 
     def cooling_checkpoint(self, now: float) -> dict | None:
@@ -716,27 +854,46 @@ class Controller:
         # Recheck today's radiator against the gate, not an old ready-to-open latch.
         return True
 
+    def settings_compatible(self, saved):
+        if not isinstance(saved, dict):
+            return False
+        optional = {
+            "adaptive_cooling",
+            "cooling_fraction_max",
+            "cooling_full_error",
+            "room_trend_window",
+            "cooling_min_gap",
+        }
+        defaults = asdict(Settings())
+        values = {**{k: defaults[k] for k in optional}, **saved}
+        # Operational timeout increase does not change a measured reference/gate.
+        if values.get("max_open_seconds") == 900 and self.settings.max_open_seconds == 1200:
+            values["max_open_seconds"] = 1200
+        return values == asdict(self.settings)
+
     def restore(self, data: dict, now: float) -> bool:
         """Restore calibration only. Fail closed on malformed/incompatible storage."""
         self.reset_reference()
         try:
             if not isinstance(data, dict):
                 return False
-            saved_settings = data.get("settings")
-            if not isinstance(saved_settings, dict):
+            if data.get("schema") != 1 or not self.settings_compatible(data.get("settings")):
                 return False
-            # Only the new, defaulted fields may be absent in beta 1–3 storage.
-            new_fields = {
-                "adaptive_cooling",
-                "cooling_fraction_max",
-                "cooling_full_error",
-                "room_trend_window",
-                "cooling_min_gap",
-            }
-            defaults = asdict(Settings())
-            saved_settings = {**{k: defaults[k] for k in new_fields}, **saved_settings}
-            if data.get("schema") != 1 or saved_settings != asdict(self.settings):
-                return False
+            self._retry_calibration = data.get("retry_calibration", False) is True
+            recovery = data.get("recovery")
+            if recovery is not None:
+                at, reason = recovery["resume_at"], recovery["reason"]
+                if (
+                    isinstance(at, bool)
+                    or not math.isfinite(at)
+                    or at > now + 86400
+                    or not isinstance(reason, str)
+                    or not reason
+                ):
+                    return False
+                self._recovery_reason = reason
+                self._recovery_next_open = at
+                self._retry_calibration = True
             raw = data.get("reference")
             if raw is None:
                 return False
@@ -775,6 +932,14 @@ class Controller:
             "phase": str(self.phase),
             "reason": self.reason,
             "fault": self.fault,
+            "recovery_reason": self._recovery_reason,
+            "recovery_resume_at": (
+                self._recovery_deadline + self._recovery_pause()
+                if self.phase == Phase.RECOVERY_HEATING
+                else self._recovery_next_open
+            )
+            if self._recovery_reason
+            else None,
             "requested_open": self.wants_open,
             "reference_temperature": self.reference.temperature if self.reference else None,
             "reference_age": max(0, now - self.reference.measured_at) if self.reference else None,

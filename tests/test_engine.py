@@ -140,20 +140,20 @@ def test_ticks_without_reports_never_establish_plateau():
     assert c.reference is None
     assert c.fault is None
     c.evaluate(482, enabled=True, heat_mode=True, target=24)
-    assert c.fault == "stale_radiator_temperature"
-    assert not c.wants_open
+    assert c.fault is None and c._recovery_reason == "stale_radiator_temperature"
+    assert c.phase == Phase.RECOVERY_HEATING
 
 
-def test_timeout_and_fault_are_latched():
+def test_timeout_retries_after_one_twenty_percent_cycle():
     c = Controller()
-    for t in range(0, 901, 30):
+    for t in range(0, 1201, 30):
         step(c, t, 20)
-    assert c.fault == "maximum_open_duration"
-    step(c, 930, 20)
+    assert c.fault is None and c.phase == Phase.RECOVERY_PAUSE
+    assert c._recovery_next_open == 6000
+    step(c, 5999, 20)
     assert not c.wants_open
-    c.reset_fault()
-    step(c, 960, 20)
-    assert c.wants_open
+    step(c, 6000, 20)
+    assert c.phase == Phase.CALIBRATING
 
 
 def test_declining_temperature_does_not_calibrate():
@@ -236,25 +236,25 @@ def test_reference_expiring_during_pulse_does_not_extend_it():
 def test_lag_outside_observed_trace_fails_closed():
     c = Controller(replace(Settings(), bootstrap_lag=300))
     calibration(c)
-    assert c.fault == "unusable_calibration"
+    assert c.fault is None and c._recovery_reason == "unusable_calibration"
     assert not c.wants_open
 
 
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), 200])
-def test_invalid_temperature_closes_existing_pulse(invalid):
+def test_invalid_temperature_switches_existing_pulse_to_pwm(invalid):
     c = Controller()
     step(c, 0, 20)
     step(c, 30, invalid)
-    assert c.fault == "missing_temperature"
-    assert not c.wants_open
+    assert c.fault is None and c._recovery_reason == "missing_temperature"
+    assert c.phase == Phase.RECOVERY_HEATING and c.opened_at == 0
 
 
-def test_clock_reversal_stops_open_pulse():
+def test_clock_reversal_uses_monotonic_floor_and_timed_fallback():
     c = Controller()
     step(c, 100, 20)
     c.evaluate(99, enabled=True, heat_mode=True, target=24)
-    assert c.fault == "clock_moved_backwards"
-    assert not c.wants_open
+    assert c.fault is None and c._recovery_reason == "clock_moved_backwards"
+    assert c.phase == Phase.RECOVERY_HEATING
 
 
 @pytest.mark.parametrize(
