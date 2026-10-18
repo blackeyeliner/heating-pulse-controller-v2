@@ -141,7 +141,7 @@ async def test_failed_first_close_still_attempts_second_limit(hass, entry, devic
     r.actuator._limit = AsyncMock(side_effect=fail_first)
     with pytest.raises(HomeAssistantError):
         await r.set_enabled(True)
-    assert r.engine.fault == "actuator_error"
+    assert r.reconnect.active and r.engine.fault is None
     assert not r.enabled
     assert any(
         c[0] == "number" and c[2]["entity_id"] == "number.closing" and c[2]["value"] == 100
@@ -185,7 +185,7 @@ async def test_shutdown_command_failure_still_cleans_up(hass, entry, devices):
     r.actuator.close = AsyncMock(side_effect=HomeAssistantError("offline"))
     await r.stop()
     assert r._closed and not r._unsub and not r._tasks
-    assert r.engine.fault == "actuator_error"
+    assert r.reconnect.active and r.engine.fault is None
     before = len(devices)
     await fresh(hass)
     assert len(devices) == before

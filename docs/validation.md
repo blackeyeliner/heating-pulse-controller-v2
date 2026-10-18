@@ -1,3 +1,7 @@
+## Beta13 reconnection grace
+
+Added29 cases covering ten spaced retries, tenth-attempt success/failure, same-session automatic recovery, manual off, real Store reload, no catch-up burst, ownership, corrupted/broken persistence, bounded hung transport and fresh MQTT/metadata checks. The focused66-case runtime/emergency/recovery/reconnect group completed with exit0 before the final timeout guard; the final29-case reconnect group also completed with exit0 (15.24 seconds). The combined205-case run before that final guard reported all assertions passed but still exited139 during local Python interpreter finalisation. That combined process is unsuccessful. These were the local preparation results. The full206-case Linux CI run must complete cleanly before installation; the completed release/installation result is recorded in the vault deployment entry.
+
 ## Beta 12 validation
 
 177 software tests cover the existing controller and optional emergency notification/backup path. Focused tests exercise real HA state events, changed-limit feedback timeout, explicit-disable closure failure, partial backup failure/retry, mobile retry, real persistent incident reload and manual recovery without stopping ACs. Fake actuator services are registered after real platform setup where required so readback is actually exercised. Local Python 3.14 combined-suite interpreter-finalization instability remains separate from test outcomes; require a clean Linux CI exit before installation. Production delivery and installed revision are recorded in the vault deployment entry.

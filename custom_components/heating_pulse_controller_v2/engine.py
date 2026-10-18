@@ -674,6 +674,13 @@ class Controller:
     def recovery_permits_open(self, now: float):
         return self.phase == Phase.RECOVERY_HEATING and now < self._recovery_deadline
 
+    def suspend_valve(self):
+        """Abandon an untrustworthy pulse without declaring a critical fault."""
+        self._discard_episode()
+        self.phase = Phase.OFF
+        self.reason = "valve_reconnecting"
+        self.revision += 1
+
     def trip(self, reason: str, now: float):
         if reason == "actuator_error":
             if self.wants_open:

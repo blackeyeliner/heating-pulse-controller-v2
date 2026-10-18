@@ -1,6 +1,7 @@
 """Sequenced Sonoff limits. All calls are owned by one runtime lock."""
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 
@@ -62,6 +63,63 @@ class SonoffActuator:
             raise HomeAssistantError(
                 "Valve limit feedback did not confirm the requested value"
             ) from err
+        finally:
+            unsubscribe()
+
+    async def _subscribe_probe(self, receive):
+        """Use the existing MQTT discovery state topic; never guess a device topic."""
+        try:
+            from homeassistant.components import mqtt
+            from homeassistant.components.mqtt import debug_info
+        except ImportError as err:
+            raise HomeAssistantError("MQTT integration is unavailable for valve probe") from err
+        from homeassistant.helpers import entity_registry as er
+
+        entry = er.async_get(self.hass).async_get(self.config[CONF_OPENING])
+        if entry is None or entry.platform != "mqtt" or not entry.device_id:
+            raise HomeAssistantError("Cannot find MQTT valve feedback binding")
+        try:
+            info = debug_info.info_for_device(self.hass, entry.device_id)
+            item = next(e for e in info["entities"] if e["entity_id"] == entry.entity_id)
+            payload = item["discovery_data"]["payload"]
+            topic = payload.get("state_topic", payload.get("stat_t"))
+            if isinstance(topic, str) and topic.startswith("~/"):
+                topic = payload["~"] + topic[1:]
+            if not isinstance(topic, str) or not topic or "+" in topic or "#" in topic:
+                raise ValueError("Missing exact MQTT state topic")
+        except (AttributeError, KeyError, TypeError, ValueError, StopIteration) as err:
+            raise HomeAssistantError("Cannot identify MQTT valve feedback topic") from err
+        return await mqtt.async_subscribe(self.hass, topic, receive, qos=0)
+
+    async def probe(self):
+        """Confirm a live non-retained MQTT reply to safe closing commands.
+
+        Cached no-op HA number states alone must not end a reconnect episode.
+        Sonoff/Z2M publishes numeric state after awaiting the Zigbee write.
+        """
+        received = asyncio.Event()
+
+        @callback
+        def receive(message):
+            if message.retain:
+                return
+            try:
+                data = json.loads(message.payload)
+                if (
+                    float(data["valve_opening_degree"]) == 0
+                    and float(data["valve_closing_degree"]) == 100
+                ):
+                    received.set()
+            except ValueError, TypeError, KeyError:
+                pass
+
+        unsubscribe = await self._subscribe_probe(receive)
+        try:
+            await self.close()
+            async with asyncio.timeout(self.feedback_timeout):
+                await received.wait()
+        except TimeoutError as err:
+            raise HomeAssistantError("No live MQTT valve reply to reconnect probe") from err
         finally:
             unsubscribe()
 

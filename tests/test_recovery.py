@@ -156,7 +156,7 @@ async def test_runtime_unavailable_valve_is_the_critical_fault(hass, entry, devi
     await r.set_enabled(True)
     hass.states.async_set("number.opening", "unavailable")
     await r._process()
-    assert r.engine.fault == "actuator_error" and not r.enabled
+    assert r.reconnect.active and r.engine.fault is None and r.enabled
     await r.stop()
 
 

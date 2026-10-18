@@ -35,9 +35,11 @@ from .const import (
 )
 from .emergency import Emergency
 from .engine import Controller, Settings
+from .reconnect import Reconnect
 from .window import cold_reason, is_window_open
 
 _LOGGER = logging.getLogger(__name__)
+VALVE_PROBE_TIMEOUT = 45
 
 
 class Runtime:
@@ -76,6 +78,7 @@ class Runtime:
         self._last_target = math.nan
         self._started_at = self.now()
         self._cooling_restore_status = "not_saved"
+        self.reconnect = Reconnect(hass, entry, self.config, lambda: self.now())
         self.emergency = Emergency(hass, entry, self.config, lambda: self.now(), self._notify)
 
     def _capture_gate(self):
@@ -178,6 +181,7 @@ class Runtime:
     async def start(self):
         self._started_at = self.now()
         active_emergency = await self.emergency.load()
+        await self.reconnect.load()
         stored = await self.store.async_load()
         if stored:
             restored = self.engine.restore(stored, self.now())
@@ -202,8 +206,12 @@ class Runtime:
                 # in this session must never resurrect the previous episode.
                 await self.store.async_save(self._storage_data())
         if active_emergency:
+            if self.reconnect.active:
+                await self.reconnect.clear()
             self.engine.trip("actuator_error", self.now())
             self.emergency.kick()
+        elif self.reconnect.active:
+            self.engine.suspend_valve()
         # No initial state snapshot is passed off as a fresh report.
         watched = (
             self._sensor_ids + [self.config[CONF_THERMOSTAT]] + self.config.get(CONF_GUARDS, [])
@@ -397,6 +405,8 @@ class Runtime:
             _LOGGER.exception("Emergency window close failed for %s", self.entry.title)
 
     def _permitted(self):
+        if self.reconnect.active:
+            return False
         mode, target = self._inputs()
         now = self.now()
         self.engine.evaluate(
@@ -473,11 +483,53 @@ class Runtime:
             "restored" if self.engine.restore_cooling(checkpoint, now) else "discarded"
         )
 
+    async def _suspect_valve(self):
+        if self.reconnect.active or self.emergency.active or self.engine.fault == "actuator_error":
+            return
+        self._capture_gate()
+        await self.reconnect.begin()
+        self.engine.suspend_valve()
+        self.actuator.commanded_open = None
+        self._pending_cooling = None
+        self._pending_gate = None
+        self.store.async_delay_save(self._storage_data, 1)
+        self._arm_window_deadline()
+        self._notify()
+
+    async def _retry_valve(self):
+        """Only closed commands during suspicion; normal demand resumes afterwards."""
+        if not self.reconnect.due or not self._guards_clear():
+            return
+        await self.reconnect.attempt()
+        try:
+            # Repeat close even if the entities still say unavailable: sending
+            # a stop is useful while the transport is coming back online.
+            async with asyncio.timeout(VALVE_PROBE_TIMEOUT):
+                await self.actuator.probe()
+            if not self._actuator_available():
+                raise HomeAssistantError("Valve entities are still unavailable")
+        except HomeAssistantError, TimeoutError:
+            if self.reconnect.exhausted:
+                self.engine.trip("actuator_error", self.now())
+                self.enabled = False
+                self._owned = False
+                # Persist the confirmed incident before removing suspicion.
+                await self.emergency.trigger()
+                await self.reconnect.clear()
+            return
+        await self.reconnect.clear()
+        # No old open pulse or contaminated peak is resumed. The usual fresh
+        # inputs, current demand, ownership and cooling gate apply again.
+        self.engine.suspend_valve()
+        if self._restart_gate is not None:
+            self.engine.set_restart_gate(
+                self._restart_gate["temperature"], self._restart_gate["source"]
+            )
+
     async def _process(self):
         async with self._lock:
             if self._closed:
                 return
-            now = self.now()
             before = self.engine.revision
             previous = (self.engine.phase, self.engine.reason)
             self._restore_cooling_if_ready()
@@ -485,8 +537,13 @@ class Runtime:
             gate_before = self._restart_gate
             mode, target = self._inputs()
             if self.enabled and not self._actuator_available():
-                self.engine.trip("actuator_error", now)
-                self.enabled = False
+                await self._suspect_valve()
+            if self.reconnect.active:
+                await self._protect_window()
+                await self._retry_valve()
+                if self.reconnect.active or self.engine.fault:
+                    self._notify()
+                    return
             self.engine.evaluate(
                 self.now(),
                 enabled=self.enabled and self._guards_clear(),
@@ -514,8 +571,7 @@ class Runtime:
                         await self.actuator.close()
                 except HomeAssistantError, TimeoutError:
                     _LOGGER.exception("Valve command failed for %s", self.entry.title)
-                    self.engine.trip("actuator_error", self.now())
-                    self.enabled = False
+                    await self._suspect_valve()
             if self.engine.fault == "actuator_error":
                 await self.emergency.trigger()
             self._capture_gate()
@@ -539,24 +595,23 @@ class Runtime:
                     )
                 if not self._guards_clear():
                     raise HomeAssistantError("Legacy control automations must be off")
+                if self.reconnect.active:
+                    raise HomeAssistantError("Waiting for valve reconnection attempts")
                 if self.engine.fault:
                     raise HomeAssistantError("Reset the controller fault before enabling")
-                now = self.now()
                 _, target = self._inputs()
                 if not math.isfinite(target):
                     raise HomeAssistantError("Waiting for a valid thermostat setpoint")
+                self._owned = True
                 for key in (CONF_TRV, CONF_OPENING, CONF_CLOSING):
                     state = self.hass.states.get(self.config[key])
                     if state is None or state.state in ("unknown", "unavailable"):
-                        self.engine.trip("actuator_error", now)
-                        await self.emergency.trigger()
+                        await self._suspect_valve()
                         raise HomeAssistantError(f"Unavailable valve entity: {self.config[key]}")
-                self._owned = True
                 try:
                     await self.actuator.close()
                 except HomeAssistantError, TimeoutError:
-                    self.engine.trip("actuator_error", now)
-                    await self.emergency.trigger()
+                    await self._suspect_valve()
                     self._notify()
                     raise
                 self.enabled = True
@@ -567,8 +622,7 @@ class Runtime:
                     try:
                         await self.actuator.close()
                     except HomeAssistantError, TimeoutError:
-                        self.engine.trip("actuator_error", self.now())
-                        await self.emergency.trigger()
+                        await self._suspect_valve()
                         self._notify()
                         raise
         await self._process()
@@ -577,6 +631,8 @@ class Runtime:
         if self.enabled:
             raise HomeAssistantError("Disable control before resetting a fault")
         async with self._lock:
+            if self.reconnect.active:
+                raise HomeAssistantError("Waiting for valve reconnection attempts")
             self.engine.reset_fault()
             await self.emergency.resolve()
             self._notify()
@@ -608,8 +664,7 @@ class Runtime:
                 if self._owned:
                     await self.actuator.close()
             except HomeAssistantError, TimeoutError:
-                self.engine.trip("actuator_error", self.now())
-                await self.emergency.trigger()
+                await self._suspect_valve()
                 _LOGGER.exception("Final valve close failed for %s", self.entry.title)
             finally:
                 self.engine.evaluate(
@@ -641,6 +696,12 @@ class Runtime:
         return {
             **self.engine.diagnostics(self.now()),
             **self.emergency.diagnostics(),
+            **self.reconnect.diagnostics(),
+            **(
+                {"phase": "valve_reconnecting", "reason": "valve_reconnecting"}
+                if self.reconnect.active
+                else {}
+            ),
             "enabled": self.enabled,
             "commanded_open": self.actuator.commanded_open,
             "reporting_verified": self.config.get(CONF_REPORTS, False),

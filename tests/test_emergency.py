@@ -30,6 +30,15 @@ async def critical(r, hass):
     await hass.async_block_till_done()
 
 
+async def expire_reconnect(r, hass):
+    clock = [r.now()]
+    r.now = lambda: clock[0]
+    for _ in range(10):
+        clock[0] += 60
+        await r._process()
+        await hass.async_block_till_done()
+
+
 async def test_setup_is_passive_and_critical_fault_alerts_and_heats_backups_once(
     hass, entry, devices
 ):
@@ -163,6 +172,8 @@ async def test_failed_explicit_enable_also_triggers_alarm(hass, entry, devices):
     with pytest.raises(HomeAssistantError):
         await r.set_enabled(True)
     await hass.async_block_till_done()
+    assert not pushes and r.reconnect.active and r.engine.fault is None
+    await expire_reconnect(r, hass)
     assert len(pushes) == 1 and r.diagnostics()["backup_requested"] == 2
     await r.stop()
 
@@ -180,6 +191,8 @@ async def test_missing_feedback_after_published_command_is_a_real_valve_fault(ha
     await fresh(hass)
     await r.set_enabled(True)
     await hass.async_block_till_done()
+    assert r.reconnect.active and r.engine.fault is None and not pushes
+    await expire_reconnect(r, hass)
     assert r.engine.fault == "actuator_error" and not r.enabled
     assert len(pushes) == 1 and r.diagnostics()["backup_requested"] == 2
     await r.stop()
@@ -193,7 +206,7 @@ async def test_optimistic_feedback_is_not_accepted(hass, entry, devices):
     await fresh(hass)
     with pytest.raises(HomeAssistantError):
         await r.set_enabled(True)
-    assert r.engine.fault == "actuator_error"
+    assert r.reconnect.active and r.engine.fault is None
     await r.stop()
 
 
@@ -236,6 +249,8 @@ async def test_missing_close_feedback_alarms_even_on_explicit_disable(hass, entr
     with pytest.raises(HomeAssistantError):
         await r.set_enabled(False)
     await hass.async_block_till_done()
+    assert r.reconnect.active and r.engine.fault is None and not pushes
+    await expire_reconnect(r, hass)
     assert r.engine.fault == "actuator_error" and not r.enabled
     assert len(pushes) == 1 and r.diagnostics()["backup_requested"] == 2
     await r.stop()
