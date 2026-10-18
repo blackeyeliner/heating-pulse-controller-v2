@@ -58,6 +58,11 @@ class PulseSensor(PulseEntity, SensorEntity):
                     "max_open_seconds",
                     "window_pwm_open_seconds",
                     "window_pwm_closed_seconds",
+                    "emergency_active",
+                    "emergency_notification",
+                    "backup_selected",
+                    "backup_requested",
+                    "backup_failed",
                 )
             }
         if self.key == "reference_age":

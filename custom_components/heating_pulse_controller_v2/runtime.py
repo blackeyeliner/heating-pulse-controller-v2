@@ -33,6 +33,7 @@ from .const import (
     CONF_WINDOW,
     DOMAIN,
 )
+from .emergency import Emergency
 from .engine import Controller, Settings
 from .window import cold_reason, is_window_open
 
@@ -75,6 +76,7 @@ class Runtime:
         self._last_target = math.nan
         self._started_at = self.now()
         self._cooling_restore_status = "not_saved"
+        self.emergency = Emergency(hass, entry, self.config, lambda: self.now(), self._notify)
 
     def _capture_gate(self):
         if self._pending_gate is not None or self.engine.fault:
@@ -175,6 +177,7 @@ class Runtime:
 
     async def start(self):
         self._started_at = self.now()
+        active_emergency = await self.emergency.load()
         stored = await self.store.async_load()
         if stored:
             restored = self.engine.restore(stored, self.now())
@@ -198,6 +201,9 @@ class Runtime:
                 # Consume the clean-stop checkpoint before subscribing. A crash
                 # in this session must never resurrect the previous episode.
                 await self.store.async_save(self._storage_data())
+        if active_emergency:
+            self.engine.trip("actuator_error", self.now())
+            self.emergency.kick()
         # No initial state snapshot is passed off as a fresh report.
         watched = (
             self._sensor_ids + [self.config[CONF_THERMOSTAT]] + self.config.get(CONF_GUARDS, [])
@@ -510,6 +516,8 @@ class Runtime:
                     _LOGGER.exception("Valve command failed for %s", self.entry.title)
                     self.engine.trip("actuator_error", self.now())
                     self.enabled = False
+            if self.engine.fault == "actuator_error":
+                await self.emergency.trigger()
             self._capture_gate()
             if before != self.engine.revision or gate_before != self._restart_gate:
                 self.store.async_delay_save(self._storage_data, 1)
@@ -541,12 +549,14 @@ class Runtime:
                     state = self.hass.states.get(self.config[key])
                     if state is None or state.state in ("unknown", "unavailable"):
                         self.engine.trip("actuator_error", now)
+                        await self.emergency.trigger()
                         raise HomeAssistantError(f"Unavailable valve entity: {self.config[key]}")
                 self._owned = True
                 try:
                     await self.actuator.close()
                 except HomeAssistantError, TimeoutError:
                     self.engine.trip("actuator_error", now)
+                    await self.emergency.trigger()
                     self._notify()
                     raise
                 self.enabled = True
@@ -554,7 +564,13 @@ class Runtime:
                 # An enable awaiting its initial close may have set this again.
                 self.enabled = False
                 if self._owned:
-                    await self.actuator.close()
+                    try:
+                        await self.actuator.close()
+                    except HomeAssistantError, TimeoutError:
+                        self.engine.trip("actuator_error", self.now())
+                        await self.emergency.trigger()
+                        self._notify()
+                        raise
         await self._process()
 
     async def reset_fault(self):
@@ -562,6 +578,7 @@ class Runtime:
             raise HomeAssistantError("Disable control before resetting a fault")
         async with self._lock:
             self.engine.reset_fault()
+            await self.emergency.resolve()
             self._notify()
 
     async def reset_reference(self):
@@ -592,6 +609,7 @@ class Runtime:
                     await self.actuator.close()
             except HomeAssistantError, TimeoutError:
                 self.engine.trip("actuator_error", self.now())
+                await self.emergency.trigger()
                 _LOGGER.exception("Final valve close failed for %s", self.entry.title)
             finally:
                 self.engine.evaluate(
@@ -612,6 +630,7 @@ class Runtime:
                         stored["cooling"] = checkpoint
                         stored["cooling_context"] = self._cooling_context()
                 await self.store.async_save(stored)
+        await self.emergency.stop()
         pending = [task for task in self._tasks if task is not asyncio.current_task()]
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
@@ -621,6 +640,7 @@ class Runtime:
     def diagnostics(self):
         return {
             **self.engine.diagnostics(self.now()),
+            **self.emergency.diagnostics(),
             "enabled": self.enabled,
             "commanded_open": self.actuator.commanded_open,
             "reporting_verified": self.config.get(CONF_REPORTS, False),

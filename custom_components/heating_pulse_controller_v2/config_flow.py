@@ -25,6 +25,7 @@ from .const import (
     CONF_WINDOW,
     DOMAIN,
 )
+from .emergency import CONF_BACKUP, CONF_NOTIFY
 from .engine import Settings
 
 
@@ -57,7 +58,7 @@ ENTITY_SCHEMA = vol.Schema(
 )
 
 
-def settings_schema(values):
+def settings_schema(values, hass=None):
     defaults = Settings()
     schema = {}
     for field in fields(Settings):
@@ -74,6 +75,23 @@ def settings_schema(values):
     schema[vol.Optional(CONF_WINDOW, description={"suggested_value": values.get(CONF_WINDOW)})] = (
         entity("cover")
     )
+    schema[
+        vol.Optional(CONF_BACKUP, description={"suggested_value": values.get(CONF_BACKUP, [])})
+    ] = entity("climate", multiple=True)
+    notify_choices = [""]
+    if hass:
+        notify_choices += [
+            "notify." + name
+            for name in hass.services.async_services().get("notify", {})
+            if name.startswith("mobile_app_")
+        ]
+    schema[
+        vol.Optional(CONF_NOTIFY, description={"suggested_value": values.get(CONF_NOTIFY, "")})
+    ] = selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=notify_choices, custom_value=True, mode=selector.SelectSelectorMode.DROPDOWN
+        )
+    )
     return vol.Schema(schema)
 
 
@@ -85,6 +103,27 @@ def validate_window(hass, data):
         return "entity_unavailable"
     if not state.attributes.get("supported_features", 0) & CoverEntityFeature.CLOSE:
         return "unsupported_window"
+    return None
+
+
+def validate_emergency(hass, data):
+    notifier = data.get(CONF_NOTIFY, "")
+    if notifier:
+        parts = notifier.split(".")
+        if len(parts) != 2 or parts[0] != "notify" or not hass.services.has_service(*parts):
+            return "invalid_emergency_notify"
+    forbidden = {data.get(CONF_THERMOSTAT), data.get(CONF_TRV)}
+    for entity_id in data.get(CONF_BACKUP, []):
+        state = hass.states.get(entity_id)
+        if entity_id in forbidden:
+            return "backup_is_primary"
+        if state is None:
+            return "entity_unavailable"
+        modes = state.attributes.get("hvac_modes", [])
+        if modes and "heat" not in modes:
+            return "unsupported_backup"
+        if not state.attributes.get("min_temp", 4) <= 20 <= state.attributes.get("max_temp", 35):
+            return "unsupported_backup"
     return None
 
 
@@ -124,6 +163,8 @@ def validate_entities(hass, data):
         state = hass.states.get(data[key])
         if state is None or state.state in ("unknown", "unavailable"):
             return "entity_unavailable"
+        if state.attributes.get("assumed_state"):
+            return "optimistic_valve_limits"
         low, high = state.attributes.get("min", 0), state.attributes.get("max", 100)
         if not low <= 0 <= value <= 100 <= high:
             return "unsupported_limits"
@@ -167,17 +208,22 @@ class PulseConfigFlow(ConfigFlow, domain=DOMAIN):
             except ValueError, TypeError:
                 errors["base"] = "invalid_settings"
             else:
-                if error := validate_window(self.hass, user_input):
+                if error := (
+                    validate_window(self.hass, user_input)
+                    or validate_emergency(self.hass, {**self._data, **user_input})
+                ):
                     return self.async_show_form(
                         step_id="tuning",
-                        data_schema=settings_schema(user_input),
+                        data_schema=settings_schema(user_input, self.hass),
                         errors={"base": error},
                     )
                 return self.async_create_entry(
                     title=self._data["name"], data={**self._data, **user_input}
                 )
         return self.async_show_form(
-            step_id="tuning", data_schema=settings_schema(user_input or {}), errors=errors
+            step_id="tuning",
+            data_schema=settings_schema(user_input or {}, self.hass),
+            errors=errors,
         )
 
     @staticmethod
@@ -195,16 +241,27 @@ class PulseOptionsFlow(OptionsFlowWithReload):
             except ValueError, TypeError:
                 errors["base"] = "invalid_settings"
             else:
-                if error := validate_window(self.hass, user_input):
+                if error := (
+                    validate_window(self.hass, user_input)
+                    or validate_emergency(
+                        self.hass,
+                        {**self.config_entry.data, **self.config_entry.options, **user_input},
+                    )
+                ):
                     return self.async_show_form(
                         step_id="init",
-                        data_schema=settings_schema(user_input),
+                        data_schema=settings_schema(user_input, self.hass),
                         errors={"base": error},
                     )
                 return self.async_create_entry(
-                    data={**user_input, CONF_WINDOW: user_input.get(CONF_WINDOW, "")}
+                    data={
+                        **user_input,
+                        CONF_WINDOW: user_input.get(CONF_WINDOW, ""),
+                        CONF_NOTIFY: user_input.get(CONF_NOTIFY, ""),
+                        CONF_BACKUP: user_input.get(CONF_BACKUP, []),
+                    }
                 )
         values = {**self.config_entry.data, **self.config_entry.options, **(user_input or {})}
         return self.async_show_form(
-            step_id="init", data_schema=settings_schema(values), errors=errors
+            step_id="init", data_schema=settings_schema(values, self.hass), errors=errors
         )

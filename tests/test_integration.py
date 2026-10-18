@@ -209,6 +209,16 @@ async def test_real_reload_preserves_confirmed_cooling_gate(hass, config, device
     assert float(gate.state) == 29
     assert gate.attributes["restore_status"] == "restored"
     assert not new.enabled
+
+    # Real platform setup replaces the fixture services. Supply actual readback
+    # after setup so opening still exercises the production feedback contract.
+    async def number_feedback(call):
+        entity_id = call.data["entity_id"]
+        state = hass.states.get(entity_id)
+        devices.append((call.domain, call.service, dict(call.data)))
+        hass.states.async_set(entity_id, call.data["value"], state.attributes)
+
+    hass.services.async_register("number", "set_value", number_feedback)
     await new.set_enabled(True)
     assert new.actuator.commanded_open
     await hass.config_entries.async_unload(entry.entry_id)

@@ -31,7 +31,7 @@ Versions before `0.1.0b3` incorrectly classify the controller as a helper: exist
 
 HACS reads `custom_components/heating_pulse_controller_v2/` directly from the repository. The separately built ZIP is for manual installation/recovery: extract its `custom_components/heating_pulse_controller_v2` directory into HA's `/config/custom_components/`, then restart HA.
 
-Installation and configuration send **no valve commands**. The pilot starts disabled after every HA restart or integration reload. Calibration and a validated confirmed cooling episode can be restored, but an interrupted open pulse and the enabled state are never restored. Re-enable explicitly after checking the room. With verified reporting configured and a valid known thermostat setpoint, explicit enable can use bounded recovery PWM while temperature reports are missing; ordinary adaptive operation still requires fresh reports. Automatic restart of heating is a later operating-policy decision, not implemented in this beta.
+Initial installation and configuration send **no valve commands**. Reloading an existing owner requests valve closure; a previously recorded emergency resumes its pending optional actions. The pilot starts disabled after every HA restart or integration reload. Calibration and a validated confirmed cooling episode can be restored, but an interrupted open pulse and the enabled state are never restored. Re-enable explicitly after checking the room. With verified reporting configured and a valid known thermostat setpoint, explicit enable can use bounded recovery PWM while temperature reports are missing; ordinary adaptive operation still requires fresh reports. Automatic restart of heating is a later operating-policy decision, not implemented in this beta.
 
 ## Actuator and ownership
 
@@ -43,7 +43,19 @@ This beta supports the Sonoff opening/closing-limit interface used by the pilot.
 - The runtime serialises commands, checks inhibition between service calls, and blocks enablement if any selected legacy automation is not off. If one becomes enabled during operation, it yields control by closing and inhibiting its own heating; it automatically becomes eligible again once all selected writers are off. This ownership handover is not a valve fault. It does not disable the other automation itself.
 - Separate integration entries cannot share the same selected actuator. Undeclared writers and manual device changes are outside this ownership check.
 
-A successful service call confirms delivery through HA, not physical stem position. Unload and normal HA shutdown request closure. A HA crash, power loss or Zigbee outage cannot be made fail-closed by this Python integration; the device's outage behaviour must be checked before live commissioning.
+Changed valve-limit commands must be reflected by non-optimistic limit entities within 15 seconds. For the pilot Sonoff/Zigbee2MQTT path, limit state follows the Zigbee write response. Already-matching values are accepted without a new report because HA can suppress identical reports. This is not a continuous heartbeat: a silent disconnect may only be discovered at the next changed command or when the valve becomes unavailable. Limit readback does not prove physical stem movement or water flow. Unload and normal HA shutdown request closure. A HA crash, power loss or Zigbee outage cannot be made fail-closed by this Python integration; the device's outage behaviour must be checked before live commissioning.
+
+## Emergency notification and backup heating
+
+In **Configure**, optionally select an **Emergency notification service** (for example `notify.mobile_app_<phone>`) and multiple **Backup climates**. A critical valve-control failure sends a mobile-app push and requests `heat` / **20 °C** on every selected unit. The room thermostat and its physical TRV cannot be selected as their own backup. Empty selections disable these optional actions.
+
+The trigger is `actuator_error`: unavailable valve/control entities, failed service calls, or missing confirmation of a changed valve limit. Sensor/calibration failures continue recovery PWM and do not activate the reserve. Controllers that are deliberately disabled and do not own the valve do not monitor it for emergencies. HA itself must be running to detect and handle a failure.
+
+One incident is persisted independently of calibration. A successful push and each successfully requested backup are remembered through reload/restart. Failed actions retry once per minute without blocking valve control; failure of one unit does not prevent the others. A service acknowledgement is not proof that the phone received the push or that an AC physically heats. Successful backup commands are not continually reasserted, so later manual changes are respected. A crash between an external action and its saved acknowledgement can cause a repeat.
+
+After checking the valve, use **Reset fault**, then explicitly enable normal control. **Backup ACs are never automatically turned off** by reset, disable, recovery, or restart: turn them off manually. A stored active emergency resumes pending backup/notification attempts after restart even though ordinary radiator control starts disabled. A new incident after reset can send a new notification. Simultaneous failures in different room entries may each notify; shared backup lists can be requested by each incident.
+
+Phase attributes expose `emergency_active`, `emergency_notification`, `backup_selected`, `backup_requested` and `backup_failed`. A requested backup means both HA service calls completed, not physical heat confirmation. Failed alarm persistence is logged; live attempts continue, but restart deduplication then cannot be guaranteed.
 
 ## Sensors and tuning
 

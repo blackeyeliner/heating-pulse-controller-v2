@@ -21,7 +21,7 @@
       },
       "tuning": {
         "title": "Control parameters",
-        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode. With a window selected, opening it switches a running pulse to a 15-minute total-open limit without restarting it. There is no initial forced pause. Timed pulse closure starts at least 45 minutes off; repeat only on room demand. Closing the window restores ordinary termination and cooling rules. Room ≤16 °C or radiator ≤10 °C requests immediate window closure while Control enabled is on, including during heating faults. Data/calibration failures use timed recovery: closed window up to 20 minutes on / at least 80 minutes off, open or unknown window up to 15 minutes on / at least 45 minutes off. Only valve-control failures latch a fault. No physical closure or frost protection is guaranteed.",
+        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode. With a window selected, opening it switches a running pulse to a 15-minute total-open limit without restarting it. There is no initial forced pause. Timed pulse closure starts at least 45 minutes off; repeat only on room demand. Closing the window restores ordinary termination and cooling rules. Room ≤16 °C or radiator ≤10 °C requests immediate window closure while Control enabled is on, including during heating faults. Data/calibration failures use timed recovery: closed window up to 20 minutes on / at least 80 minutes off, open or unknown window up to 15 minutes on / at least 45 minutes off. Only valve-control failures latch a fault. No physical closure or frost protection is guaranteed. On a critical valve-control failure, send one mobile notification per incident and request heat / 20 °C on selected backup climates. Backups stay running until changed manually, including after fault reset.",
         "data": {
           "reference_seconds": "Reference lifetime (seconds)",
           "cooling_fraction": "Remaining temperature excess before restart (fraction)",
@@ -49,7 +49,9 @@
           "cooling_full_error": "Projected room deficit for maximum restart fraction (°C)",
           "room_trend_window": "Room trend and projection window (seconds)",
           "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (°C)",
-          "window_cover": "Window motor (optional; enables 25% PWM and emergency closure)"
+          "window_cover": "Window motor (optional; enables 25% PWM and emergency closure)",
+          "emergency_notify_service": "Emergency mobile notification service (optional)",
+          "backup_climates": "Backup air conditioners (optional; heat at 20 °C)"
         }
       }
     },
@@ -62,7 +64,11 @@
       "unsupported_limits": "Limit entities must support the full 0–100 range.",
       "inverted_limits": "The minimum position (100 minus closing limit) must not exceed the opening limit.",
       "invalid_settings": "Check positive values, fractions between 0 and 1, hysteresis, delay bounds, sample gap and maximum heating duration.",
-      "unsupported_window": "The window cover must support closing."
+      "unsupported_window": "The window cover must support closing.",
+      "invalid_emergency_notify": "Select an available notify service.",
+      "backup_is_primary": "A backup must not be the primary room thermostat or radiator valve.",
+      "unsupported_backup": "Each backup must support heating with a 20 °C target.",
+      "optimistic_valve_limits": "Valve limit entities must provide confirmed feedback rather than optimistic state."
     },
     "abort": {
       "already_configured": "An existing controller already owns this actuator."
@@ -72,7 +78,7 @@
     "step": {
       "init": {
         "title": "Control parameters",
-        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode. With a window selected, opening it switches a running pulse to a 15-minute total-open limit without restarting it. There is no initial forced pause. Timed pulse closure starts at least 45 minutes off; repeat only on room demand. Closing the window restores ordinary termination and cooling rules. Room ≤16 °C or radiator ≤10 °C requests immediate window closure while Control enabled is on, including during heating faults. Data/calibration failures use timed recovery: closed window up to 20 minutes on / at least 80 minutes off, open or unknown window up to 15 minutes on / at least 45 minutes off. Only valve-control failures latch a fault. No physical closure or frost protection is guaranteed.",
+        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode. With a window selected, opening it switches a running pulse to a 15-minute total-open limit without restarting it. There is no initial forced pause. Timed pulse closure starts at least 45 minutes off; repeat only on room demand. Closing the window restores ordinary termination and cooling rules. Room ≤16 °C or radiator ≤10 °C requests immediate window closure while Control enabled is on, including during heating faults. Data/calibration failures use timed recovery: closed window up to 20 minutes on / at least 80 minutes off, open or unknown window up to 15 minutes on / at least 45 minutes off. Only valve-control failures latch a fault. No physical closure or frost protection is guaranteed. On a critical valve-control failure, send one mobile notification per incident and request heat / 20 °C on selected backup climates. Backups stay running until changed manually, including after fault reset.",
         "data": {
           "reference_seconds": "Reference lifetime (seconds)",
           "cooling_fraction": "Remaining temperature excess before restart (fraction)",
@@ -100,14 +106,19 @@
           "cooling_full_error": "Projected room deficit for maximum restart fraction (°C)",
           "room_trend_window": "Room trend and projection window (seconds)",
           "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (°C)",
-          "window_cover": "Window motor (optional; enables 25% PWM and emergency closure)"
+          "window_cover": "Window motor (optional; enables 25% PWM and emergency closure)",
+          "emergency_notify_service": "Emergency mobile notification service (optional)",
+          "backup_climates": "Backup air conditioners (optional; heat at 20 °C)"
         }
       }
     },
     "error": {
       "invalid_settings": "Check positive values, fractions between 0 and 1, hysteresis, delay bounds, sample gap and maximum heating duration.",
       "entity_unavailable": "A selected entity is missing or unavailable.",
-      "unsupported_window": "The window cover must support closing."
+      "unsupported_window": "The window cover must support closing.",
+      "invalid_emergency_notify": "Select an available notify service.",
+      "backup_is_primary": "A backup must not be the primary room thermostat or radiator valve.",
+      "unsupported_backup": "Each backup must support heating with a 20 °C target."
     }
   }
 }

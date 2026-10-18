@@ -4,8 +4,9 @@ import asyncio
 import logging
 from collections.abc import Callable
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
     CONF_CLOSE_VALUE,
@@ -24,20 +25,45 @@ class SonoffActuator:
         self.hass = hass
         self.config = config
         self.commanded_open: bool | None = None
+        self.feedback_timeout = 15
 
     async def _call(self, domain: str, service: str, data: dict):
         async with asyncio.timeout(5):
             await self.hass.services.async_call(domain, service, data, blocking=True)
 
     async def _limit(self, key: str, value: float):
-        await self._call(
-            "number",
-            "set_value",
-            {
-                "entity_id": self.config[key],
-                "value": value,
-            },
-        )
+        entity_id = self.config[key]
+        current = self.hass.states.get(entity_id)
+        if current and current.attributes.get("assumed_state"):
+            raise HomeAssistantError("Optimistic valve limits cannot confirm control delivery")
+        received = asyncio.Event()
+
+        @callback
+        def check(_event=None):
+            state = self.hass.states.get(entity_id)
+            try:
+                matches = (
+                    state is not None
+                    and not state.attributes.get("assumed_state")
+                    and float(state.state) == value
+                )
+            except TypeError, ValueError:
+                matches = False
+            if matches:
+                received.set()
+
+        unsubscribe = async_track_state_change_event(self.hass, [entity_id], check)
+        try:
+            await self._call("number", "set_value", {"entity_id": entity_id, "value": value})
+            check()
+            async with asyncio.timeout(self.feedback_timeout):
+                await received.wait()
+        except TimeoutError as err:
+            raise HomeAssistantError(
+                "Valve limit feedback did not confirm the requested value"
+            ) from err
+        finally:
+            unsubscribe()
 
     async def _mirror(self, value: int):
         if self.config.get(CONF_OUTPUT):
@@ -117,7 +143,15 @@ class SonoffActuator:
                 if not permitted():
                     await self.close()
                     return
-                await self._call(domain, service, data)
+                if domain == "number":
+                    key = (
+                        CONF_OPENING
+                        if data["entity_id"] == self.config[CONF_OPENING]
+                        else CONF_CLOSING
+                    )
+                    await self._limit(key, data["value"])
+                else:
+                    await self._call(domain, service, data)
                 if domain == "number" and data["entity_id"] == self.config[CONF_OPENING]:
                     await asyncio.sleep(0.3)
             if not permitted():

@@ -1,3 +1,9 @@
+## Beta 12 validation
+
+177 software tests cover the existing controller and optional emergency notification/backup path. Focused tests exercise real HA state events, changed-limit feedback timeout, explicit-disable closure failure, partial backup failure/retry, mobile retry, real persistent incident reload and manual recovery without stopping ACs. Fake actuator services are registered after real platform setup where required so readback is actually exercised. Local Python 3.14 combined-suite interpreter-finalization instability remains separate from test outcomes; require a clean Linux CI exit before installation. Production delivery and installed revision are recorded in the vault deployment entry.
+
+Changed limit readback on the pilot uses the installed Zigbee2MQTT converter's awaited Zigbee write response. This does not provide continuous heartbeat monitoring or physical stem/heat/flow confirmation. A cached unchanged limit cannot detect a silent failure by itself. No real fault or reserve activation is injected on production.
+
 # Validation
 
 ## Current result: beta 11, 2026-10-18
