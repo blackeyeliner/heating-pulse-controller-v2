@@ -50,7 +50,16 @@ class PulseSensor(PulseEntity, SensorEntity):
     def extra_state_attributes(self):
         diagnostics = self.runtime.diagnostics()
         if self.key == "phase":
-            return {key: diagnostics[key] for key in ("recovery_reason", "recovery_resume_at")}
+            return {
+                key: diagnostics[key]
+                for key in (
+                    "recovery_reason",
+                    "recovery_resume_at",
+                    "max_open_seconds",
+                    "window_pwm_open_seconds",
+                    "window_pwm_closed_seconds",
+                )
+            }
         if self.key == "reference_age":
             age = diagnostics["reference_age"]
             formatted = None

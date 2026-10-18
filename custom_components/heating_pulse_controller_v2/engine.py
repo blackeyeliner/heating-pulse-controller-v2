@@ -933,6 +933,9 @@ class Controller:
             "reason": self.reason,
             "fault": self.fault,
             "recovery_reason": self._recovery_reason,
+            "max_open_seconds": self.settings.max_open_seconds,
+            "window_pwm_open_seconds": PWM_OPEN_SECONDS,
+            "window_pwm_closed_seconds": PWM_CLOSED_SECONDS,
             "recovery_resume_at": (
                 self._recovery_deadline + self._recovery_pause()
                 if self.phase == Phase.RECOVERY_HEATING

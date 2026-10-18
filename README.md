@@ -76,7 +76,7 @@ Defaults are provisional commissioning values:
 | Plateau slope / relative slope | ≤0.15 °C/min / ≤20% | Both conditions must hold |
 | Prior warming / rising slope | ≥3 °C / ≥0.5 °C/min | Reject flat cold starts |
 | Maximum gap in a usable curve | 120 seconds | Discard interrupted curve evidence |
-| Radiator / room timeout | 180 / 1800 seconds | Close and latch a fault on stale data |
+| Radiator / room timeout | 180 / 1800 seconds | Switch to bounded recovery PWM on stale data |
 | Maximum open duration | 1200 seconds | Hard exit while HA is running |
 | Peak confirmation | ≥0.2 °C decline after ≥60 seconds | Confirm the end of residual warming |
 | Startup surface excess | ≤3 °C above room | Cold-start cooling gate |
@@ -87,11 +87,11 @@ The ordinary closing threshold comes from the observed calibration trace at esti
 
 ## Optional window control (beta 6)
 
-Select a **Window motor** through Configure to enable this policy for one room. Leave it empty to preserve ordinary operation. Configuration/reload remains passive and Control enabled must be explicitly turned on after fresh temperature reports. Clearing the selection removes window control.
+Select a **Window motor** through Configure to enable this policy for one room. Leave it empty to preserve ordinary operation. Configuration/reload remains passive and Control enabled must be explicitly turned on; missing temperature reports select bounded recovery PWM. Clearing the selection removes window control.
 
 - An open, opening, closing or partially open cover selects timed termination. If a pulse is running, keep the valve open and its original start time; close when its total opening reaches **15 minutes** (or the configured maximum-open cap, if shorter). If that time has already elapsed when the window opens, close immediately. Clear plateau evidence and suspend reference/lag learning while exposed.
 - If the valve is closed when the window opens, retain ordinary room-demand hysteresis and cooling readiness. There is **no initial forced pause** merely because the window opened. The first eligible demand starts a timed pulse.
-- After any timed pulse closure, wait **at least 45 minutes** while the window remains open. Then repeat only if the room still requests heat; that completed pause replaces the ordinary cooling gate in window mode. Room satisfaction, off, unknown feedback or protection can truncate a pulse. Missed pulses are not replayed; late closure extends the next pause to at least three times elapsed opening. This describes nominal maximum 25% duty for repeated timed cycles, not a rolling flow or heat budget across changes back to ordinary mode.
+- After any timed pulse closure, wait **at least 45 minutes** while the window remains open. Then repeat only if the room still requests heat; that completed pause replaces the ordinary cooling gate in window mode. Room satisfaction, off or protection can truncate a pulse; unknown feedback switches to timed recovery. Missed pulses are not replayed; late closure extends the next pause to at least three times elapsed opening. This describes nominal maximum 25% duty for repeated timed cycles, not a rolling flow or heat budget across changes back to ordinary mode.
 - No reference, plateau, residual-lag or peak learning occurs during window PWM. Unknown/unavailable window feedback selects conservative 15/45 timed recovery; it is not treated as a confirmed closed window.
 - While Control enabled is on, **room ≤16 °C OR radiator ≤10 °C requests immediate `cover.close_cover`**, without first testing a heating response. PWM stops at those boundaries. Window protection also operates during a latched heating fault and with the thermostat off; it is inactive when Control enabled is off or the integration is unloaded. Each fresh, independently cold sensor can trigger closure even if the other sensor is missing. Stale values are not used as current measurements.
 - Do not confuse service success with physical closure. If the cover remains exposed (or unknown), closure can be retried at most once per 30 seconds while cold. Command failures are logged and exposed through **Window status**. The controller never opens the window.

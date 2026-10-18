@@ -49,7 +49,7 @@
           "cooling_full_error": "Projected room deficit for maximum restart fraction (°C)",
           "room_trend_window": "Room trend and projection window (seconds)",
           "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (°C)",
-          "window_cover": "Window motor (optional; enables 20% PWM and emergency closure)"
+          "window_cover": "Window motor (optional; enables 25% PWM and emergency closure)"
         }
       }
     },
@@ -100,7 +100,7 @@
           "cooling_full_error": "Projected room deficit for maximum restart fraction (°C)",
           "room_trend_window": "Room trend and projection window (seconds)",
           "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (°C)",
-          "window_cover": "Window motor (optional; enables 20% PWM and emergency closure)"
+          "window_cover": "Window motor (optional; enables 25% PWM and emergency closure)"
         }
       }
     },
