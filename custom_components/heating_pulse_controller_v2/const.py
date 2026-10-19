@@ -14,4 +14,4 @@ CONF_OUTPUT = "output_helper"
 CONF_GUARDS = "legacy_automations"
 CONF_REPORTS = "reporting_verified"
 CONF_WINDOW = "window_cover"
-PLATFORMS = ["sensor", "binary_sensor", "switch", "button"]
+PLATFORMS = ["sensor", "binary_sensor", "switch", "button", "climate"]

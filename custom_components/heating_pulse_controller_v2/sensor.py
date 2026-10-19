@@ -7,6 +7,7 @@ from .const import CONF_WINDOW
 from .entity import PulseEntity
 
 SENSORS = {
+    "valve_position": ("Valve position", "%"),
     "phase": ("Phase", None),
     "reason": ("Last decision", None),
     "reference_temperature": ("Reference temperature", "°C"),
@@ -24,7 +25,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(
         PulseSensor(entry, key)
         for key in SENSORS
-        if key != "window_status" or entry.runtime_data.config.get(CONF_WINDOW)
+        if (key != "window_status" or entry.runtime_data.config.get(CONF_WINDOW))
+        and (key != "valve_position" or entry.runtime_data.native)
     )
 
 

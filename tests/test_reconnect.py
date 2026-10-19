@@ -110,7 +110,7 @@ async def test_repeated_events_and_downtime_do_not_burst_or_reset_attempts(hass,
     await r.stop()
 
 
-async def test_suspicion_survives_real_store_reload_but_enabled_does_not(hass, entry, devices):
+async def test_suspicion_and_enable_intent_survive_real_store_reload(hass, entry, devices):
     pushes = await configured(hass, entry)
     r, clock = await running(hass, entry)
     await failed_close(r)
@@ -133,7 +133,7 @@ async def test_suspicion_survives_real_store_reload_but_enabled_does_not(hass, e
     clock[0] += 60
     await fresh(hass)
     await d._process()
-    assert not d.reconnect.active and not d.enabled and not d.actuator.commanded_open
+    assert not d.reconnect.active and d.enabled and d.actuator.commanded_open
     assert not pushes
     await d.stop()
 

@@ -36,6 +36,7 @@ from .const import (
 from .emergency import Emergency
 from .engine import Controller, Settings
 from .reconnect import Reconnect
+from .thermostat import CONF_NATIVE, RoomRequest
 from .window import cold_reason, is_window_open
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,6 +48,8 @@ class Runtime:
         self.hass = hass
         self.entry = entry
         self.config = {**entry.data, **entry.options}
+        self.native = self.config.get(CONF_NATIVE, not bool(self.config.get(CONF_THERMOSTAT)))
+        self.request = RoomRequest(hass, entry)
         defaults = Settings()
         settings = Settings(
             **{f.name: self.config.get(f.name, getattr(defaults, f.name)) for f in fields(Settings)}
@@ -54,7 +57,9 @@ class Runtime:
         self.engine = Controller(settings)
         self.actuator = SonoffActuator(hass, self.config)
         self.store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
-        self.enabled = False  # Explicit commissioning after every HA start/reload.
+        self.enabled = False
+        self._resume_pending = False
+        self._control_store = Store(hass, 1, f"{DOMAIN}.control.{entry.entry_id}")
         self._owned = False
         self._closed = False
         self._lock = asyncio.Lock()
@@ -180,6 +185,13 @@ class Runtime:
 
     async def start(self):
         self._started_at = self.now()
+        await self.request.load()
+        control = await self._control_store.async_load()
+        self._resume_pending = bool(
+            isinstance(control, dict)
+            and control.get("enabled") is True
+            and control.get("context") == self._cooling_context()
+        )
         active_emergency = await self.emergency.load()
         await self.reconnect.load()
         stored = await self.store.async_load()
@@ -206,6 +218,8 @@ class Runtime:
                 # in this session must never resurrect the previous episode.
                 await self.store.async_save(self._storage_data())
         if active_emergency:
+            self._resume_pending = False
+            await self._save_control(False)
             if self.reconnect.active:
                 await self.reconnect.clear()
             self.engine.trip("actuator_error", self.now())
@@ -214,7 +228,9 @@ class Runtime:
             self.engine.suspend_valve()
         # No initial state snapshot is passed off as a fresh report.
         watched = (
-            self._sensor_ids + [self.config[CONF_THERMOSTAT]] + self.config.get(CONF_GUARDS, [])
+            self._sensor_ids
+            + ([self.config[CONF_THERMOSTAT]] if not self.native else [])
+            + self.config.get(CONF_GUARDS, [])
         )
         if self.config.get(CONF_WINDOW):
             watched.append(self.config[CONF_WINDOW])
@@ -304,6 +320,9 @@ class Runtime:
         self._schedule()
 
     def _inputs(self):
+        if self.native:
+            self._input_error = None
+            return self.request.mode == "heat", self.request.target
         thermostat = self.hass.states.get(self.config[CONF_THERMOSTAT])
         known_mode = bool(thermostat and thermostat.state in {"heat", "off"})
         if known_mode:
@@ -483,6 +502,54 @@ class Runtime:
             "restored" if self.engine.restore_cooling(checkpoint, now) else "discarded"
         )
 
+    @property
+    def control_requested(self):
+        return self.enabled or self._resume_pending
+
+    async def _save_control(self, enabled):
+        try:
+            await self._control_store.async_save(
+                {"enabled": enabled, "context": self._cooling_context()}
+            )
+        except OSError:
+            _LOGGER.exception("Unable to persist control enablement")
+
+    async def _resume_control(self):
+        if not self._resume_pending or self.engine.fault or self.reconnect.active:
+            return
+        if not self._actuator_available():
+            await self._suspect_valve()
+            return
+        if not self._guards_clear():
+            return
+        now = self.now()
+        ready = self._window_open() is not None and all(
+            sample is not None and sample.at >= self._started_at and now - sample.at <= timeout
+            for sample, timeout in [
+                (self.engine.room, self.engine.settings.room_timeout),
+                (self.engine.radiator, self.engine.settings.radiator_timeout),
+            ]
+        )
+        # Give normal reporting a startup window, then retain the established
+        # bounded maintenance PWM policy for missing non-actuator inputs.
+        if not ready and now - self._started_at < self.engine.settings.radiator_timeout:
+            return
+        if not self.config.get(CONF_REPORTS):
+            return
+        _, target = self._inputs()
+        if not math.isfinite(target):
+            return
+        self._owned = True
+        try:
+            await self.actuator.close()
+        except HomeAssistantError, TimeoutError:
+            await self._suspect_valve()
+            return
+        if not self._resume_pending or self._closed or not self._guards_clear():
+            return
+        self.enabled = True
+        self._resume_pending = False
+
     async def _suspect_valve(self):
         if self.reconnect.active or self.emergency.active or self.engine.fault == "actuator_error":
             return
@@ -512,6 +579,8 @@ class Runtime:
             if self.reconnect.exhausted:
                 self.engine.trip("actuator_error", self.now())
                 self.enabled = False
+                self._resume_pending = False
+                await self._save_control(False)
                 self._owned = False
                 # Persist the confirmed incident before removing suspicion.
                 await self.emergency.trigger()
@@ -536,6 +605,7 @@ class Runtime:
             self._restore_gate_if_ready()
             gate_before = self._restart_gate
             mode, target = self._inputs()
+            await self._resume_control()
             if self.enabled and not self._actuator_available():
                 await self._suspect_valve()
             if self.reconnect.active:
@@ -584,6 +654,7 @@ class Runtime:
 
     async def set_enabled(self, enabled: bool):
         if not enabled:
+            self._resume_pending = False
             self.enabled = False  # Inhibit queued/in-flight opens before waiting for lock.
         async with self._lock:
             if self._closed:
@@ -615,9 +686,12 @@ class Runtime:
                     self._notify()
                     raise
                 self.enabled = True
+                self._resume_pending = False
+                await self._save_control(True)
             else:
                 # An enable awaiting its initial close may have set this again.
                 self.enabled = False
+                await self._save_control(False)
                 if self._owned:
                     try:
                         await self.actuator.close()
@@ -698,12 +772,21 @@ class Runtime:
             **self.emergency.diagnostics(),
             **self.reconnect.diagnostics(),
             **(
+                {"phase": "startup_wait", "reason": "waiting_for_fresh_reports"}
+                if self._resume_pending and not self.reconnect.active and not self.engine.fault
+                else {}
+            ),
+            "control_requested": self.control_requested,
+            **(
                 {"phase": "valve_reconnecting", "reason": "valve_reconnecting"}
                 if self.reconnect.active
                 else {}
             ),
             "enabled": self.enabled,
             "commanded_open": self.actuator.commanded_open,
+            "valve_position": None
+            if self.actuator.commanded_open is None
+            else (5 if self.actuator.commanded_open else 0),
             "reporting_verified": self.config.get(CONF_REPORTS, False),
             "cooling_restore_status": self._cooling_restore_status,
             "window_status": (

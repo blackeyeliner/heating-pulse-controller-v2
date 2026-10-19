@@ -6,7 +6,9 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN, PLATFORMS
+from .frontend import register as register_frontend
 from .runtime import Runtime
+from .thermostat import CONF_NATIVE
 
 type PulseEntry = ConfigEntry[Runtime]
 
@@ -37,6 +39,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: PulseEntry) -> bool:
                 }
             ),
         )
+    if not hass.services.has_service(DOMAIN, "adopt_thermostat"):
+
+        async def adopt_thermostat(call: ServiceCall):
+            selected = hass.config_entries.async_get_entry(call.data["config_entry_id"])
+            if (
+                selected is None
+                or selected.domain != DOMAIN
+                or not hasattr(selected, "runtime_data")
+            ):
+                raise HomeAssistantError("Heating controller entry is not loaded")
+            runtime = selected.runtime_data
+            if runtime.control_requested or runtime.native:
+                raise HomeAssistantError("Disable the legacy-input controller before adoption")
+            state = hass.states.get(runtime.config.get("thermostat", ""))
+            if state is None or state.state not in {"heat", "off"}:
+                raise HomeAssistantError("Legacy thermostat is unavailable")
+            await runtime.request.set(state.state, state.attributes.get("temperature"))
+            options = dict(selected.options)
+            data = {**selected.data, CONF_NATIVE: True}
+            if not call.data["preserve_history_helper"]:
+                data.pop("output_helper", None)
+                options.pop("output_helper", None)
+            hass.config_entries.async_update_entry(selected, data=data, options=options)
+            await hass.config_entries.async_reload(selected.entry_id)
+
+        hass.services.async_register(
+            DOMAIN,
+            "adopt_thermostat",
+            adopt_thermostat,
+            schema=vol.Schema(
+                {
+                    vol.Required("config_entry_id"): str,
+                    vol.Optional("preserve_history_helper", default=False): bool,
+                }
+            ),
+        )
+    await register_frontend(hass)
     runtime = Runtime(hass, entry)
     entry.runtime_data = runtime
     try:

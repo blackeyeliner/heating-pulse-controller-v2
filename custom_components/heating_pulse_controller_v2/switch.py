@@ -15,7 +15,7 @@ class PulseSwitch(PulseEntity, SwitchEntity):
 
     @property
     def is_on(self):
-        return self.runtime.enabled
+        return self.runtime.control_requested
 
     async def async_turn_on(self, **kwargs):
         await self.runtime.set_enabled(True)

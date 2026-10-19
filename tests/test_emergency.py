@@ -211,6 +211,9 @@ async def test_optimistic_feedback_is_not_accepted(hass, entry, devices):
 
 
 async def test_configuration_rejects_primary_device_and_unsupported_targets(hass, entry, devices):
+    from test_integration import setup_hass
+
+    await setup_hass(hass)
     await configured(hass, entry)
     assert validate_emergency(hass, {**entry.data, **entry.options}) is None
     assert (

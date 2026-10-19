@@ -8,6 +8,7 @@ from homeassistant.components.cover import CoverEntityFeature
 from homeassistant.config_entries import ConfigFlow, OptionsFlowWithReload
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .const import (
@@ -27,6 +28,7 @@ from .const import (
 )
 from .emergency import CONF_BACKUP, CONF_NOTIFY
 from .engine import Settings
+from .thermostat import CONF_NATIVE
 
 
 def entity(domain, **kwargs):
@@ -44,7 +46,7 @@ def number(low, high, step=1):
 ENTITY_SCHEMA = vol.Schema(
     {
         vol.Required("name"): selector.TextSelector(),
-        vol.Required(CONF_THERMOSTAT): entity("climate"),
+        vol.Optional(CONF_THERMOSTAT): entity("climate"),
         vol.Required(CONF_TRV): entity("climate"),
         vol.Required(CONF_ROOM): entity("sensor", device_class="temperature"),
         vol.Required(CONF_RADIATOR): entity("sensor", device_class="temperature"),
@@ -115,7 +117,8 @@ def validate_emergency(hass, data):
     forbidden = {data.get(CONF_THERMOSTAT), data.get(CONF_TRV)}
     for entity_id in data.get(CONF_BACKUP, []):
         state = hass.states.get(entity_id)
-        if entity_id in forbidden:
+        registered = er.async_get(hass).async_get(entity_id)
+        if entity_id in forbidden or registered and registered.platform == DOMAIN:
             return "backup_is_primary"
         if state is None:
             return "entity_unavailable"
@@ -136,6 +139,7 @@ def validate_entities(hass, data):
     ids = [
         data[key]
         for key in (CONF_THERMOSTAT, CONF_TRV, CONF_ROOM, CONF_RADIATOR, CONF_OPENING, CONF_CLOSING)
+        if data.get(key)
     ]
     if len(set(ids)) != len(ids):
         return "distinct_entities"
@@ -151,6 +155,8 @@ def validate_entities(hass, data):
         if state.attributes.get("unit_of_measurement") != UnitOfTemperature.CELSIUS:
             return "celsius_required"
     for key in (CONF_THERMOSTAT, CONF_TRV):
+        if key == CONF_THERMOSTAT and (data.get(CONF_NATIVE) or not data.get(key)):
+            continue
         state = hass.states.get(data[key])
         if state is None or state.state in ("unknown", "unavailable"):
             return "entity_unavailable"
@@ -218,7 +224,12 @@ class PulseConfigFlow(ConfigFlow, domain=DOMAIN):
                         errors={"base": error},
                     )
                 return self.async_create_entry(
-                    title=self._data["name"], data={**self._data, **user_input}
+                    title=self._data["name"],
+                    data={
+                        **self._data,
+                        **user_input,
+                        CONF_NATIVE: not bool(self._data.get(CONF_THERMOSTAT)),
+                    },
                 )
         return self.async_show_form(
             step_id="tuning",

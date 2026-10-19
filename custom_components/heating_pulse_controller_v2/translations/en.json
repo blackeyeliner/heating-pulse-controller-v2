@@ -4,10 +4,10 @@
     "step": {
       "user": {
         "title": "Radiator pulse controller",
-        "description": "Select the existing room thermostat and calibrated Sonoff limit entities. Configuration does not move the valve. Select all legacy valve writers so they cannot run alongside this controller.",
+        "description": "Select the room/radiator sensors and calibrated Sonoff limits. Leave existing thermostat empty for an independent native thermostat (initially off, 21 \u00b0C). An existing thermostat and output helper are optional legacy compatibility inputs. Configuration does not move the valve. Select all legacy valve writers.",
         "data": {
           "name": "Room name",
-          "thermostat": "Room thermostat (setpoint and mode)",
+          "thermostat": "Existing thermostat (optional legacy input)",
           "trv": "Physical Sonoff TRV",
           "room_sensor": "Room temperature sensor",
           "radiator_sensor": "Radiator surface temperature sensor",
@@ -15,43 +15,43 @@
           "closing_entity": "Sonoff closing-limit number",
           "opening_value": "Calibrated opening limit (%)",
           "closing_value": "Calibrated closing limit (%)",
-          "output_helper": "Existing logical valve-position helper (optional)",
+          "output_helper": "Legacy valve history helper (optional)",
           "legacy_automations": "Legacy control automations that must stay off"
         }
       },
       "tuning": {
         "title": "Control parameters",
-        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode. With a window selected, opening it switches a running pulse to a 15-minute total-open limit without restarting it. There is no initial forced pause. Timed pulse closure starts at least 45 minutes off; repeat only on room demand. Closing the window restores ordinary termination and cooling rules. Room ≤16 °C or radiator ≤10 °C requests immediate window closure while Control enabled is on, including during heating faults. Data/calibration failures use timed recovery: closed window up to 20 minutes on / at least 80 minutes off, open or unknown window up to 15 minutes on / at least 45 minutes off. Only valve-control failures latch a fault. No physical closure or frost protection is guaranteed. On a critical valve-control failure, send one mobile notification per incident and request heat / 20 °C on selected backup climates. Backups stay running until changed manually, including after fault reset.",
+        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode. With a window selected, opening it switches a running pulse to a 15-minute total-open limit without restarting it. There is no initial forced pause. Timed pulse closure starts at least 45 minutes off; repeat only on room demand. Closing the window restores ordinary termination and cooling rules. Room \u226416 \u00b0C or radiator \u226410 \u00b0C requests immediate window closure while Control enabled is on, including during heating faults. Data/calibration failures use timed recovery: closed window up to 20 minutes on / at least 80 minutes off, open or unknown window up to 15 minutes on / at least 45 minutes off. Only valve-control failures latch a fault. No physical closure or frost protection is guaranteed. On a critical valve-control failure, send one mobile notification per incident and request heat / 20 \u00b0C on selected backup climates. Backups stay running until changed manually, including after fault reset.",
         "data": {
           "reference_seconds": "Reference lifetime (seconds)",
           "cooling_fraction": "Remaining temperature excess before restart (fraction)",
-          "start_error": "Start heating below setpoint by (°C)",
-          "stop_error": "Stop heating below setpoint by (°C)",
+          "start_error": "Start heating below setpoint by (\u00b0C)",
+          "stop_error": "Stop heating below setpoint by (\u00b0C)",
           "bootstrap_lag": "Initial residual warming delay (seconds)",
           "max_lag": "Maximum accepted residual delay (seconds)",
           "trend_window": "Temperature trend window (seconds)",
           "plateau_seconds": "Plateau confirmation duration (seconds)",
-          "plateau_slope": "Maximum plateau slope (°C/min)",
+          "plateau_slope": "Maximum plateau slope (\u00b0C/min)",
           "plateau_ratio": "Maximum plateau/rising slope ratio",
-          "fall_tolerance": "Allowed negative slope from noise (°C/min)",
-          "min_rise": "Required surface warming before plateau detection (°C)",
-          "min_rising_slope": "Required rising slope (°C/min)",
+          "fall_tolerance": "Allowed negative slope from noise (\u00b0C/min)",
+          "min_rise": "Required surface warming before plateau detection (\u00b0C)",
+          "min_rising_slope": "Required rising slope (\u00b0C/min)",
           "max_sample_gap": "Maximum gap within a usable curve (seconds)",
           "radiator_timeout": "Radiator data timeout (seconds)",
           "room_timeout": "Room data timeout (seconds)",
           "max_open_seconds": "Maximum valve-open time (seconds)",
-          "peak_drop": "Cooling needed to confirm a peak (°C)",
+          "peak_drop": "Cooling needed to confirm a peak (\u00b0C)",
           "peak_confirm_seconds": "Minimum peak confirmation interval (seconds)",
-          "startup_excess": "Maximum surface excess for starting after restart (°C)",
+          "startup_excess": "Maximum surface excess for starting after restart (\u00b0C)",
           "reporting_verified": "I verified that fresh temperature reports arrive even at constant temperature",
           "adaptive_cooling": "Adapt cooling to room demand (experimental)",
           "cooling_fraction_max": "Maximum remaining temperature excess with adaptive cooling (fraction)",
-          "cooling_full_error": "Projected room deficit for maximum restart fraction (°C)",
+          "cooling_full_error": "Projected room deficit for maximum restart fraction (\u00b0C)",
           "room_trend_window": "Room trend and projection window (seconds)",
-          "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (°C)",
+          "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (\u00b0C)",
           "window_cover": "Window motor (optional; enables 25% PWM and emergency closure)",
           "emergency_notify_service": "Emergency mobile notification service (optional)",
-          "backup_climates": "Backup air conditioners (optional; heat at 20 °C)"
+          "backup_climates": "Backup air conditioners (optional; heat at 20 \u00b0C)"
         }
       }
     },
@@ -61,13 +61,13 @@
       "invalid_temperature": "A sensor does not report a finite temperature.",
       "celsius_required": "Both sensors must report degrees Celsius.",
       "unsupported_climate": "Both thermostats must support heat and off.",
-      "unsupported_limits": "Limit entities must support the full 0–100 range.",
+      "unsupported_limits": "Limit entities must support the full 0\u2013100 range.",
       "inverted_limits": "The minimum position (100 minus closing limit) must not exceed the opening limit.",
       "invalid_settings": "Check positive values, fractions between 0 and 1, hysteresis, delay bounds, sample gap and maximum heating duration.",
       "unsupported_window": "The window cover must support closing.",
       "invalid_emergency_notify": "Select an available notify service.",
       "backup_is_primary": "A backup must not be the primary room thermostat or radiator valve.",
-      "unsupported_backup": "Each backup must support heating with a 20 °C target.",
+      "unsupported_backup": "Each backup must support heating with a 20 \u00b0C target.",
       "optimistic_valve_limits": "Valve limit entities must provide confirmed feedback rather than optimistic state."
     },
     "abort": {
@@ -78,37 +78,37 @@
     "step": {
       "init": {
         "title": "Control parameters",
-        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode. With a window selected, opening it switches a running pulse to a 15-minute total-open limit without restarting it. There is no initial forced pause. Timed pulse closure starts at least 45 minutes off; repeat only on room demand. Closing the window restores ordinary termination and cooling rules. Room ≤16 °C or radiator ≤10 °C requests immediate window closure while Control enabled is on, including during heating faults. Data/calibration failures use timed recovery: closed window up to 20 minutes on / at least 80 minutes off, open or unknown window up to 15 minutes on / at least 45 minutes off. Only valve-control failures latch a fault. No physical closure or frost protection is guaranteed. On a critical valve-control failure, send one mobile notification per incident and request heat / 20 °C on selected backup climates. Backups stay running until changed manually, including after fault reset.",
+        "description": "Defaults are provisional. Setup remains passive; valve control starts only when you turn on Control enabled. Unchanged fresh sensor reports must be distinguishable from missing data. Control starts disabled again after HA restart or integration reload. Adaptive cooling is experimental and disabled by default; its threshold is fixed for each cooling episode. With a window selected, opening it switches a running pulse to a 15-minute total-open limit without restarting it. There is no initial forced pause. Timed pulse closure starts at least 45 minutes off; repeat only on room demand. Closing the window restores ordinary termination and cooling rules. Room \u226416 \u00b0C or radiator \u226410 \u00b0C requests immediate window closure while Control enabled is on, including during heating faults. Data/calibration failures use timed recovery: closed window up to 20 minutes on / at least 80 minutes off, open or unknown window up to 15 minutes on / at least 45 minutes off. Only valve-control failures latch a fault. No physical closure or frost protection is guaranteed. On a critical valve-control failure, send one mobile notification per incident and request heat / 20 \u00b0C on selected backup climates. Backups stay running until changed manually, including after fault reset.",
         "data": {
           "reference_seconds": "Reference lifetime (seconds)",
           "cooling_fraction": "Remaining temperature excess before restart (fraction)",
-          "start_error": "Start heating below setpoint by (°C)",
-          "stop_error": "Stop heating below setpoint by (°C)",
+          "start_error": "Start heating below setpoint by (\u00b0C)",
+          "stop_error": "Stop heating below setpoint by (\u00b0C)",
           "bootstrap_lag": "Initial residual warming delay (seconds)",
           "max_lag": "Maximum accepted residual delay (seconds)",
           "trend_window": "Temperature trend window (seconds)",
           "plateau_seconds": "Plateau confirmation duration (seconds)",
-          "plateau_slope": "Maximum plateau slope (°C/min)",
+          "plateau_slope": "Maximum plateau slope (\u00b0C/min)",
           "plateau_ratio": "Maximum plateau/rising slope ratio",
-          "fall_tolerance": "Allowed negative slope from noise (°C/min)",
-          "min_rise": "Required surface warming before plateau detection (°C)",
-          "min_rising_slope": "Required rising slope (°C/min)",
+          "fall_tolerance": "Allowed negative slope from noise (\u00b0C/min)",
+          "min_rise": "Required surface warming before plateau detection (\u00b0C)",
+          "min_rising_slope": "Required rising slope (\u00b0C/min)",
           "max_sample_gap": "Maximum gap within a usable curve (seconds)",
           "radiator_timeout": "Radiator data timeout (seconds)",
           "room_timeout": "Room data timeout (seconds)",
           "max_open_seconds": "Maximum valve-open time (seconds)",
-          "peak_drop": "Cooling needed to confirm a peak (°C)",
+          "peak_drop": "Cooling needed to confirm a peak (\u00b0C)",
           "peak_confirm_seconds": "Minimum peak confirmation interval (seconds)",
-          "startup_excess": "Maximum surface excess for starting after restart (°C)",
+          "startup_excess": "Maximum surface excess for starting after restart (\u00b0C)",
           "reporting_verified": "I verified that fresh temperature reports arrive even at constant temperature",
           "adaptive_cooling": "Adapt cooling to room demand (experimental)",
           "cooling_fraction_max": "Maximum remaining temperature excess with adaptive cooling (fraction)",
-          "cooling_full_error": "Projected room deficit for maximum restart fraction (°C)",
+          "cooling_full_error": "Projected room deficit for maximum restart fraction (\u00b0C)",
           "room_trend_window": "Room trend and projection window (seconds)",
-          "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (°C)",
+          "cooling_min_gap": "Minimum gap below closing threshold for adaptive increase (\u00b0C)",
           "window_cover": "Window motor (optional; enables 25% PWM and emergency closure)",
           "emergency_notify_service": "Emergency mobile notification service (optional)",
-          "backup_climates": "Backup air conditioners (optional; heat at 20 °C)"
+          "backup_climates": "Backup air conditioners (optional; heat at 20 \u00b0C)"
         }
       }
     },
@@ -118,7 +118,7 @@
       "unsupported_window": "The window cover must support closing.",
       "invalid_emergency_notify": "Select an available notify service.",
       "backup_is_primary": "A backup must not be the primary room thermostat or radiator valve.",
-      "unsupported_backup": "Each backup must support heating with a 20 °C target."
+      "unsupported_backup": "Each backup must support heating with a 20 \u00b0C target."
     }
   }
 }

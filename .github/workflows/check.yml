@@ -21,6 +21,7 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest --cov=custom_components/heating_pulse_controller_v2 --cov-report=term-missing
+      - run: node --test tests/frontend.test.mjs
       - run: uv run python tools/build_release.py
       - uses: actions/upload-artifact@v4
         with:

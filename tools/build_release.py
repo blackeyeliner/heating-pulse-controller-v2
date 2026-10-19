@@ -24,7 +24,7 @@ def build(destination: Path) -> Path:
         p
         for p in COMPONENT.rglob("*")
         if p.is_file()
-        and p.suffix in {".py", ".json", ".png", ".yaml"}
+        and p.suffix in {".py", ".json", ".png", ".yaml", ".js"}
         and "__pycache__" not in p.parts
     )
     destination.mkdir(parents=True, exist_ok=True)

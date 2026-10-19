@@ -17,3 +17,18 @@ set_restart_temperature:
           step: 0.1
           unit_of_measurement: °C
           mode: box
+
+adopt_thermostat:
+  name: Adopt existing room thermostat
+  description: Capture the selected legacy thermostat's mode and target and create a native room thermostat. Disable control first. Existing entity IDs must be handed over separately before removing the old YAML thermostat.
+  fields:
+    config_entry_id:
+      name: Controller config entry ID
+      required: true
+      selector:
+        text:
+    preserve_history_helper:
+      name: Preserve legacy valve graph mirror
+      description: Optional transitional mirror only. Native control and the native valve sensor do not depend on this helper.
+      selector:
+        boolean:
