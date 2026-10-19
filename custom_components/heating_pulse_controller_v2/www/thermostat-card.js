@@ -1,7 +1,7 @@
 /* Use HA's thermostat dial; only its mode colour is overridden by actual action. */
 export function thermostatColor(state) {
   if (!state || ["unavailable", "unknown"].includes(state.state)) return "var(--state-unavailable-color, #9e9e9e)";
-  if (state.attributes.hvac_action === "heating") return "var(--orange-color, #ff9800)";
+  if (state.attributes.hvac_action === "heating") return "var(--deep-orange-color, #ff6f22)";
   if (state.attributes.hvac_action === "idle") return "var(--blue-color, #2196f3)";
   return "var(--grey-color, #9e9e9e)";
 }

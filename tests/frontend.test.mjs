@@ -20,7 +20,7 @@ const {thermostatColor, HeatingPulseThermostatCard} = await import('../custom_co
 
 test('colour follows heating/idle/off and treats absent states as unknown', () => {
   const s = action => ({state:'heat',attributes:{hvac_action:action}});
-  assert.match(thermostatColor(s('heating')), /orange/);
+  assert.equal(thermostatColor(s('heating')), 'var(--deep-orange-color, #ff6f22)');
   assert.match(thermostatColor(s('idle')), /blue/);
   assert.match(thermostatColor(s('off')), /grey/);
   assert.match(thermostatColor(s(null)), /grey/);
