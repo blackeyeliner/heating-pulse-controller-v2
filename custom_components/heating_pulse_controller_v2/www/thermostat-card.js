@@ -6,6 +6,10 @@ export function thermostatColor(state) {
   return "var(--grey-color, #9e9e9e)";
 }
 
+// HA installs its scoped custom-element registry during frontend bootstrap.
+// Wait before resolving HTMLElement or defining our card, so both use that registry.
+await customElements.whenDefined("home-assistant");
+
 export class HeatingPulseThermostatCard extends HTMLElement {
   constructor() {
     super();

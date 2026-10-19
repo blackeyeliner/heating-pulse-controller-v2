@@ -7,7 +7,7 @@ globalThis.HTMLElement = class {
     this.shadowRoot = {children: [], replaceChildren(...children) {this.children = children;}};
   }
 };
-globalThis.customElements = {get: name => elements.get(name), define: (name, cls) => elements.set(name,cls)};
+globalThis.customElements = {whenDefined: async () => {}, get: name => elements.get(name), define: (name, cls) => elements.set(name,cls)};
 const cards = [];
 globalThis.window = {loadCardHelpers: async () => ({createCardElement: config => {
   const properties = new Map();
@@ -57,4 +57,44 @@ test('latest config wins an asynchronous creation race', async () => {
   pending[0](await normal()); await Promise.resolve();
   assert.equal(card._card.config.entity,'climate.new');
   window.loadCardHelpers = normal;
+});
+
+test('early extra-module loading waits for HA to replace its custom-element registry', async () => {
+  const oldRegistry = globalThis.customElements;
+  const oldElement = globalThis.HTMLElement;
+  const oldPicker = window.customCards;
+  let ready;
+  let entered;
+  const waiting = new Promise(resolve => {entered = resolve;});
+  let earlyDefinitions = 0;
+  globalThis.customElements = {
+    whenDefined: name => {
+      assert.equal(name, 'home-assistant');
+      entered();
+      return new Promise(resolve => {ready = resolve;});
+    },
+    get: () => undefined,
+    define: () => {earlyDefinitions++;}
+  };
+  try {
+    const loading = import('../custom_components/heating_pulse_controller_v2/www/thermostat-card.js?startup-race');
+    await waiting;
+    assert.equal(earlyDefinitions, 0);
+    const frontendRegistry = new Map();
+    class FrontendElement extends oldElement {}
+    globalThis.HTMLElement = FrontendElement;
+    globalThis.customElements = {
+      get: name => frontendRegistry.get(name),
+      define: (name, cls) => frontendRegistry.set(name, cls)
+    };
+    ready();
+    const module = await loading;
+    assert.equal(frontendRegistry.get('heating-pulse-thermostat-card'), module.HeatingPulseThermostatCard);
+    assert.equal(Object.getPrototypeOf(module.HeatingPulseThermostatCard), FrontendElement);
+    assert.equal(earlyDefinitions, 0);
+  } finally {
+    globalThis.customElements = oldRegistry;
+    globalThis.HTMLElement = oldElement;
+    window.customCards = oldPicker;
+  }
 });
