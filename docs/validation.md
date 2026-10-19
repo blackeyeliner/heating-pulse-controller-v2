@@ -4,7 +4,7 @@ Added29 cases covering ten spaced retries, tenth-attempt success/failure, same-s
 
 ## Beta 12 validation
 
-177 software tests cover the existing controller and optional emergency notification/backup path. Focused tests exercise real HA state events, changed-limit feedback timeout, explicit-disable closure failure, partial backup failure/retry, mobile retry, real persistent incident reload and manual recovery without stopping ACs. Fake actuator services are registered after real platform setup where required so readback is actually exercised. Local Python 3.14 combined-suite interpreter-finalization instability remains separate from test outcomes; require a clean Linux CI exit before installation. Production delivery and installed revision are recorded in the vault deployment entry.
+227 software tests cover the existing controller and optional emergency notification/backup path. Focused tests exercise real HA state events, changed-limit feedback timeout, explicit-disable closure failure, partial backup failure/retry, mobile retry, real persistent incident reload and manual recovery without stopping ACs. Fake actuator services are registered after real platform setup where required so readback is actually exercised. Local Python 3.14 combined-suite interpreter-finalization instability remains separate from test outcomes; require a clean Linux CI exit before installation. Production delivery and installed revision are recorded in the vault deployment entry.
 
 Changed limit readback on the pilot uses the installed Zigbee2MQTT converter's awaited Zigbee write response. This does not provide continuous heartbeat monitoring or physical stem/heat/flow confirmation. A cached unchanged limit cannot detect a silent failure by itself. No real fault or reserve activation is injected on production.
 
@@ -70,7 +70,7 @@ Recorder state changes do not include every fresh unchanged sensor report. Repla
 5. Enable the controller while observing one complete calibration, ordinary pulse and cooling cycle. Inspect the estimated knee, lag and closing threshold against the live curve.
 6. Check comfort and available consumption measurements over subsequent cycles. No water-saving percentage is claimed.
 
-The beta intentionally requires explicit re-enabling after every restart/reload. Production unattended restart policy is still a separate decision.
+From beta14, enabled intent resumes automatically after compatible restart/reload and startup checks. Explicit off stays off. Real Store/config-entry tests cover native mode/target persistence, restart resume, missing-temperature fallback and manual off during an in-flight startup closure. No interrupted pulse is restored. Four Node tests cover bundled card colors, standard control forwarding and configuration races. Actual production restart and frontend checks are recorded in the vault deployment entry.
 
 ## Live reporting check and beta 2 fix
 
