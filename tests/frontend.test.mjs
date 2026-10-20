@@ -98,3 +98,44 @@ test('early extra-module loading waits for HA to replace its custom-element regi
     window.customCards = oldPicker;
   }
 });
+
+test('frost heating is red and native presentation remains Off without mutating HA state', async () => {
+  const card = new HeatingPulseThermostatCard();
+  card.setConfig({entity:'climate.frost',features:[{type:'climate-hvac-modes'}]});
+  await card._ready;
+  const state = {entity_id:'climate.frost',state:'off',attributes:{hvac_action:'heating',frost_protection_active:true,temperature:10,heating_target_temperature:23}};
+  const hass = {states:{'climate.frost':state}};
+  card.hass = hass;
+  assert.match(thermostatColor(state), /red/);
+  assert.equal(card._card.hass.states['climate.frost'].state,'off');
+  assert.equal(card._card.hass.states['climate.frost'].attributes.hvac_action,'off');
+  assert.equal(state.attributes.hvac_action,'heating');
+  assert.equal(state.attributes.temperature,10);
+  assert.equal(state.attributes.heating_target_temperature,23);
+  assert.match(card._card.properties.get('--primary-text-color'),/red/);
+  assert.equal(card._card.config.features[0].type,'climate-hvac-modes');
+  const heating = {...state,state:'heat'};
+  card.hass = {states:{'climate.frost':heating}};
+  assert.match(thermostatColor(heating),/orange/);
+  assert.equal(card._card.properties.get('--primary-text-color'),'');
+});
+
+test('Antifreeze label is scoped and restores the original native label', async () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = {createElement: tag => ({tag})};
+  try {
+    const card = new HeatingPulseThermostatCard();
+    card.setConfig({entity:'climate.frost'});
+    await card._ready;
+    const control = {_renderLabel() { return 'native label'; }, requestUpdate() {this.updates=(this.updates||0)+1;}};
+    card._card.shadowRoot = {querySelector: () => control};
+    card.hass = {states:{'climate.frost':{state:'off',attributes:{hvac_action:'heating',frost_protection_active:true}}}};
+    await card._presentationReady;
+    assert.equal(control._renderLabel().textContent,'Antifreeze');
+    assert.equal(control._renderLabel().className,'label');
+    card.hass = {states:{'climate.frost':{state:'off',attributes:{hvac_action:'off',frost_protection_active:true}}}};
+    await card._presentationReady;
+    assert.equal(control._renderLabel(),'native label');
+    assert.equal(control.updates,2);
+  } finally {globalThis.document=previousDocument;}
+});

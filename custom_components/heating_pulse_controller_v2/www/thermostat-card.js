@@ -1,6 +1,10 @@
-/* Use HA's thermostat dial; only its mode colour is overridden by actual action. */
+/* Preserve HA thermostat controls; distinguish autonomous frost protection visually. */
+export function isFrostHeating(state) {
+  return state?.state === "off" && state.attributes.frost_protection_active === true && state.attributes.hvac_action === "heating";
+}
 export function thermostatColor(state) {
   if (!state || ["unavailable", "unknown"].includes(state.state)) return "var(--state-unavailable-color, #9e9e9e)";
+  if (isFrostHeating(state)) return "var(--red-color, #f44336)";
   if (state.attributes.hvac_action === "heating") return "var(--deep-orange-color, #ff6f22)";
   if (state.attributes.hvac_action === "idle") return "var(--blue-color, #2196f3)";
   return "var(--grey-color, #9e9e9e)";
@@ -38,10 +42,46 @@ export class HeatingPulseThermostatCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     if (!this._card) return;
-    this._card.hass = hass;
-    const color = thermostatColor(hass.states[this._config.entity]);
+    const state = hass.states[this._config.entity];
+    const frost = isFrostHeating(state);
+    // Keep the native dial/features visually Off during autonomous heating.
+    // The real HA entity retains its accurate heating action; no service is sent.
+    this._card.hass = frost ? {...hass, states: {...hass.states,
+      [this._config.entity]: {...state, attributes: {...state.attributes, hvac_action: "off"}}
+    }} : hass;
+    const color = thermostatColor(state);
     for (const mode of ["heat", "off", "active", "inactive"]) {
       this._card.style.setProperty(`--state-climate-${mode}-color`, color);
+    }
+    for (const variable of ["--primary-text-color", "--secondary-text-color", "--disabled-color"]) {
+      this._card.style.setProperty(variable, frost ? color : "");
+    }
+    const generation = this._presentationGeneration = (this._presentationGeneration || 0) + 1;
+    this._presentationReady = this._updateProtectionLabel(frost, generation);
+  }
+  async _updateProtectionLabel(frost, generation) {
+    const card = this._card;
+    await card.updateComplete;
+    if (card !== this._card || generation !== this._presentationGeneration) return;
+    const control = card.shadowRoot?.querySelector("ha-state-control-climate-temperature");
+    if (!control) return;
+    await control.updateComplete;
+    if (card !== this._card || generation !== this._presentationGeneration) return;
+    // Scoped to this native control instance; preserve the native label template
+    // for all ordinary states and never replace Lit-owned DOM markers.
+    if (!control._pulseOriginalRenderLabel && typeof control._renderLabel === "function") {
+      control._pulseOriginalRenderLabel = control._renderLabel;
+      control._renderLabel = function() {
+        if (!this._pulseFrostHeating) return this._pulseOriginalRenderLabel();
+        const label = document.createElement("p");
+        label.className = "label";
+        label.textContent = "Antifreeze";
+        return label;
+      };
+    }
+    if (control._pulseFrostHeating !== frost) {
+      control._pulseFrostHeating = frost;
+      control.requestUpdate();
     }
   }
   getCardSize() { return this._card?.getCardSize?.() ?? 5; }
