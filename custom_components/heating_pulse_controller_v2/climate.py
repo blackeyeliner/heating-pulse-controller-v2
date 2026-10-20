@@ -9,6 +9,7 @@ from homeassistant.components.climate import (
     HVACMode,
 )
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.exceptions import HomeAssistantError
 
 from .const import CONF_ROOM
 from .entity import PulseEntity
@@ -53,7 +54,19 @@ class PulseClimate(PulseEntity, ClimateEntity):
 
     @property
     def target_temperature(self):
-        return self.runtime.request.target
+        return (
+            self.runtime.frost_temperature
+            if self.runtime.request.mode == "off"
+            else self.runtime.request.target
+        )
+
+    @property
+    def target_temperature_step(self):
+        if self.runtime.request.mode == "off" and self.runtime.frost_entity:
+            state = self.hass.states.get(self.runtime.frost_entity)
+            if state is not None:
+                return state.attributes.get("step", 0.5)
+        return self._attr_target_temperature_step
 
     @property
     def hvac_mode(self):
@@ -79,18 +92,31 @@ class PulseClimate(PulseEntity, ClimateEntity):
             "requested_hvac_mode": self.runtime.request.mode,
             "control_enabled": self.runtime.control_requested,
             "controller_phase": self.runtime.diagnostics()["phase"],
+            "heating_target_temperature": self.runtime.request.target,
+            "frost_protection_temperature": self.runtime.frost_temperature,
+            "frost_protection_active": self.runtime._off_protection_ready,
         }
 
     async def async_set_temperature(self, **kwargs):
         mode = kwargs.get("hvac_mode", self.runtime.request.mode)
         target = kwargs.get(ATTR_TEMPERATURE, self.runtime.request.target)
         self.runtime.request.validate(mode, target)
+        if mode == HVACMode.OFF and ATTR_TEMPERATURE in kwargs:
+            entity = self.runtime.frost_entity
+            if entity is None or self.runtime.frost_temperature is None:
+                raise HomeAssistantError("Frost protection temperature is unavailable")
+            await self.hass.services.async_call(
+                "number", "set_value", {"entity_id": entity, "value": target}, blocking=True
+            )
+            target = self.runtime.request.target
         if kwargs.get("hvac_mode") == HVACMode.OFF:
             self.runtime.enabled = False
             self.runtime._resume_pending = False
         await self.runtime.request.set(mode, target)
         if "hvac_mode" in kwargs:
-            await self.runtime.set_enabled(mode == HVACMode.HEAT)
+            await self.runtime.set_enabled(
+                mode == HVACMode.HEAT, frost_protection=mode == HVACMode.OFF
+            )
         else:
             await self.runtime._process()
         self.runtime._notify()
@@ -101,5 +127,7 @@ class PulseClimate(PulseEntity, ClimateEntity):
             self.runtime._resume_pending = False
             self.runtime.enabled = False  # Inhibit in-flight opens before persistence.
         await self.runtime.request.set(hvac_mode, self.runtime.request.target)
-        await self.runtime.set_enabled(hvac_mode == HVACMode.HEAT)
+        await self.runtime.set_enabled(
+            hvac_mode == HVACMode.HEAT, frost_protection=hvac_mode == HVACMode.OFF
+        )
         self.runtime._notify()

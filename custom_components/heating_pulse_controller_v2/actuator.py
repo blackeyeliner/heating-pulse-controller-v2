@@ -165,6 +165,33 @@ class SonoffActuator:
         self.commanded_open = False
         await self._mirror(0)
 
+    async def frost_protection(self):
+        """Hand off to firmware Off protection without a zero opening limit."""
+        await self.close()
+        confirmed = asyncio.Event()
+
+        @callback
+        def check(_event=None):
+            state = self.hass.states.get(self.config[CONF_TRV])
+            if state is not None and state.state == "off":
+                confirmed.set()
+
+        unsubscribe = async_track_state_change_event(self.hass, [self.config[CONF_TRV]], check)
+        try:
+            await self._call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": self.config[CONF_TRV], "hvac_mode": "off"},
+            )
+            check()
+            async with asyncio.timeout(self.feedback_timeout):
+                await confirmed.wait()
+        finally:
+            unsubscribe()
+        await self._limit(CONF_OPENING, self.config[CONF_OPEN_VALUE])
+        # Firmware may now open for frost protection; do not claim physical closure.
+        self.commanded_open = None
+
     async def open(self, target: float, permitted: Callable[[], bool]):
         """Recheck inhibition between awaits so a queued off always wins."""
         if not permitted():

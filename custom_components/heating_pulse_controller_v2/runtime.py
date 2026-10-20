@@ -10,6 +10,7 @@ from datetime import timedelta
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, UnitOfTemperature
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
@@ -61,6 +62,8 @@ class Runtime:
         self._resume_pending = False
         self._control_store = Store(hass, 1, f"{DOMAIN}.control.{entry.entry_id}")
         self._owned = False
+        self._off_protection_requested = False
+        self._off_protection_ready = False
         self._closed = False
         self._lock = asyncio.Lock()
         self._unsub = []
@@ -187,6 +190,13 @@ class Runtime:
         self._started_at = self.now()
         await self.request.load()
         control = await self._control_store.async_load()
+        self._off_protection_requested = bool(
+            self.native
+            and self.request.mode == "off"
+            and isinstance(control, dict)
+            and control.get("off_protection") is True
+            and control.get("context") == self._cooling_context()
+        )
         self._resume_pending = bool(
             isinstance(control, dict)
             and control.get("enabled") is True
@@ -234,6 +244,8 @@ class Runtime:
         )
         if self.config.get(CONF_WINDOW):
             watched.append(self.config[CONF_WINDOW])
+        if self.native and self.frost_entity:
+            watched.append(self.frost_entity)
         self._unsub.extend(
             [
                 async_track_state_change_event(self.hass, watched, self._state_event),
@@ -506,10 +518,40 @@ class Runtime:
     def control_requested(self):
         return self.enabled or self._resume_pending
 
+    @property
+    def frost_entity(self):
+        if self.config.get("frost_protection_entity"):
+            return self.config["frost_protection_entity"]
+        registry = er.async_get(self.hass)
+        trv = registry.async_get(self.config[CONF_TRV])
+        if trv is None or not trv.device_id:
+            return None
+        matches = [
+            e.entity_id
+            for e in er.async_entries_for_device(registry, trv.device_id)
+            if e.domain == "number"
+            and e.platform == "mqtt"
+            and e.unique_id.endswith("_frost_protection_temperature_zigbee2mqtt")
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    @property
+    def frost_temperature(self):
+        state = self.hass.states.get(self.frost_entity) if self.frost_entity else None
+        try:
+            value = float(state.state)
+            return value if math.isfinite(value) and 4 <= value <= 35 else None
+        except AttributeError, TypeError, ValueError:
+            return None
+
     async def _save_control(self, enabled):
         try:
             await self._control_store.async_save(
-                {"enabled": enabled, "context": self._cooling_context()}
+                {
+                    "enabled": enabled,
+                    "context": self._cooling_context(),
+                    "off_protection": self._off_protection_requested,
+                }
             )
         except OSError:
             _LOGGER.exception("Unable to persist control enablement")
@@ -554,6 +596,7 @@ class Runtime:
         if self.reconnect.active or self.emergency.active or self.engine.fault == "actuator_error":
             return
         self._capture_gate()
+        self._off_protection_ready = False
         await self.reconnect.begin()
         self.engine.suspend_valve()
         self.actuator.commanded_open = None
@@ -625,6 +668,23 @@ class Runtime:
             if self.enabled and not self._guards_clear():
                 self.engine.reason = "legacy_controller_enabled"
             await self._protect_window()
+            if (
+                self._off_protection_requested
+                and self.request.mode == "off"
+                and not self._resume_pending
+                and not self.engine.fault
+                and not self.emergency.active
+                and self._guards_clear()
+                and not self._off_protection_ready
+            ):
+                try:
+                    await self.actuator.frost_protection()
+                    self._off_protection_ready = True
+                    self._owned = False
+                except HomeAssistantError, TimeoutError:
+                    await self._suspect_valve()
+                    self._notify()
+                    return
             if self._owned:
                 try:
                     if self.engine.wants_open and self.actuator.commanded_open is not True:
@@ -652,7 +712,7 @@ class Runtime:
             self._arm_window_deadline()
             self._notify()
 
-    async def set_enabled(self, enabled: bool):
+    async def set_enabled(self, enabled: bool, *, frost_protection: bool = False):
         if not enabled:
             self._resume_pending = False
             self.enabled = False  # Inhibit queued/in-flight opens before waiting for lock.
@@ -660,6 +720,8 @@ class Runtime:
             if self._closed:
                 raise HomeAssistantError("Controller is unloaded")
             if enabled:
+                self._off_protection_requested = self.native and self.request.mode == "off"
+                self._off_protection_ready = False
                 if not self.config.get(CONF_REPORTS):
                     raise HomeAssistantError(
                         "Verify temperature reporting in Configure before enabling"
@@ -691,6 +753,8 @@ class Runtime:
             else:
                 # An enable awaiting its initial close may have set this again.
                 self.enabled = False
+                self._off_protection_requested = bool(frost_protection and self.native)
+                self._off_protection_ready = False
                 await self._save_control(False)
                 if self._owned:
                     try:

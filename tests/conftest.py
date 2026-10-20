@@ -54,6 +54,7 @@ def entry(config):
 
 @pytest.fixture
 def devices(hass, config):
+    hass.states.async_set("number.frost", 10, {"min": 4, "max": 35, "step": 0.5})
     hass.states.async_set(
         "climate.room", "heat", {"temperature": 24, "hvac_modes": ["off", "heat"]}
     )

@@ -4,6 +4,14 @@ Adaptive radiator pulse control as a Home Assistant custom Python integration. I
 
 **Status:** `0.1.0b16`, tested against Home Assistant **2026.9.3 / Python 3.14**. Beta 4 adaptive calibration and ordinary cycles have been observed in the office pilot. Beta 5 corrects Reference age Activity spam. Beta 6 adds optional window-aware PWM and emergency window closure. Beta 7 preserves validated cooling episodes across clean restarts. Beta 9 switches window termination in place; beta 10 also persists the last selected cooling threshold independently of a confirmed peak. Beta 11 adds non-latching timed recovery: closed-window failure PWM uses up to 20 minutes on / at least 80 minutes off; open-window PWM uses up to 15 minutes on / at least 45 minutes off (25%) without an initial forced pause. Available as a HACS custom repository, with a separate ZIP for manual installation. Long-term comfort and consumption assessment remain ongoing.
 
+## Off mode and frost protection
+
+The native thermostat displays the TRV frost threshold while Off, and the remembered room heating target while Heat. The `heating_target_temperature` attribute preserves the room target independently. Adjusting temperature while Off edits the frost threshold; it does not start heating or overwrite the remembered Heat target. Missing frost data is shown as unknown, never an invented 10 °C. The frost number is discovered from the selected TRV device in HA's entity registry and must be enabled; advanced entries may explicitly bind `frost_protection_entity`.
+
+An explicit native Off safely closes first, confirms physical TRV Off, then permits the calibrated minimum opening with full closed limit (opening configured value / closing 100). Firmware can therefore open on its own frost demand. A zero opening limit would block that protection. Once handed off, periodic ticks and unload do not force it shut again. Protection intent survives restart; fresh installs remain passive. Reconnection/critical incidents and legacy ownership guards retain priority. Control enabled with an Off thermostat still uses firmware protection, without ordinary pulse/PWM heating. Heat reacquires closed limits before normal pulse control.
+
+This is device-local protection, not a guaranteed room temperature, and depends on the TRV's temperature source and functioning hardware. [TRVZB mode, frost and opening-limit semantics](https://www.zigbee2mqtt.io/devices/TRVZB.html).
+
 ## Control behaviour
 
 1. Open only at the configured minimum operating point when the room needs heat and the radiator has cooled sufficiently.
