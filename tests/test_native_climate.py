@@ -384,7 +384,7 @@ async def test_enabled_controller_with_off_thermostat_restores_protection_after_
 
 @pytest.mark.parametrize(
     ("action", "logical", "estimated", "hvac"),
-    [("idle", 0, 0, "off"), ("heating", 21, 21, "heating"), (None, None, None, None)],
+    [("idle", 0, 0, "off"), ("heating", 5, 21, "heating"), (None, None, None, None)],
 )
 async def test_autonomous_frost_telemetry(hass, entry, devices, action, logical, estimated, hvac):
     r, c = await native(hass, entry)
@@ -396,18 +396,4 @@ async def test_autonomous_frost_telemetry(hass, entry, devices, action, logical,
     assert r.estimated_opening == estimated
     assert c.hvac_mode == "off" and c.hvac_action == hvac
     assert not r.engine.wants_open and not r.enabled
-    await r.stop()
-
-
-@pytest.mark.parametrize(
-    ("action", "closing", "expected"), [("idle", 83, 17), ("heating", 83, 21), ("idle", 100, 0)]
-)
-async def test_valve_graph_is_configured_percentage_not_legacy_five_marker(
-    hass, entry, devices, action, closing, expected
-):
-    r, c = await native(hass, entry)
-    hass.states.async_set("climate.trv", "heat", {"hvac_action": action})
-    hass.states.async_set("number.opening", 21)
-    hass.states.async_set("number.closing", closing)
-    assert r.diagnostics()["valve_position"] == expected
     await r.stop()

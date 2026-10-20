@@ -884,9 +884,13 @@ class Runtime:
             ),
             "enabled": self.enabled,
             "commanded_open": self.actuator.commanded_open,
-            "valve_position": None
-            if self.reconnect.active or self.engine.fault
-            else self.estimated_opening,
+            "valve_position": (
+                (5 if self.frost_heating else 0)
+                if self.frost_heating is not None
+                else None
+                if self.actuator.commanded_open is None
+                else (5 if self.actuator.commanded_open else 0)
+            ),
             "estimated_valve_opening": self.estimated_opening,
             "reporting_verified": self.config.get(CONF_REPORTS, False),
             "cooling_restore_status": self._cooling_restore_status,
