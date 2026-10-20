@@ -131,7 +131,7 @@ test('Antifreeze label is scoped and restores the original native label', async 
     const infoProperties=new Map(), sliderProperties=new Map(), controlProperties=new Map();
     const info={style:{setProperty:(k,v)=>infoProperties.set(k,v)}};
     const slider={style:{setProperty:(k,v)=>sliderProperties.set(k,v)}};
-    const control = {_renderLabel() { return 'native label'; }, requestUpdate() {this.updates=(this.updates||0)+1;},
+    const control = {stateObj:{state:"off",attributes:{hvac_action:"off"}}, render(){return this.stateObj;}, _renderLabel() { return 'native label'; }, requestUpdate() {this.updates=(this.updates||0)+1;},
       style:{setProperty:(k,v)=>controlProperties.set(k,v)},
       shadowRoot:{querySelector: q=>q==='.info'?info:slider}};
     card._card.shadowRoot = {querySelector: () => control};
@@ -139,12 +139,19 @@ test('Antifreeze label is scoped and restores the original native label', async 
     await card._presentationReady;
     assert.equal(control._renderLabel().textContent,'Antifreeze');
     assert.equal(control._renderLabel().className,'label');
-    assert.match(infoProperties.get('color'),/red/);
-    assert.match(sliderProperties.get('--disabled-color'),/red/);
+    assert.equal(infoProperties.get('color'),'');
+    assert.equal(control.render().state,'heat');
+    assert.equal(control.stateObj.state,'off');
+    assert.equal(card._card.hass.states['climate.frost'].state,'off');
+    assert.equal(card._hass.states['climate.frost'].state,'off');
+    assert.equal(control.render().attributes.hvac_action,'heating');
+    assert.equal(control.stateObj.attributes.hvac_action,'off');
+    assert.equal(sliderProperties.get('--disabled-color'),'');
     assert.equal(card._card.properties.has('--primary-text-color'),false);
     card.hass = {states:{'climate.frost':{state:'off',attributes:{hvac_action:'off',frost_protection_active:true}}}};
     await card._presentationReady;
     assert.equal(control._renderLabel(),'native label');
+    assert.equal(control.render().state,'off');
     assert.equal(control.updates,2);
     assert.equal(infoProperties.get('color'),'');
     assert.equal(sliderProperties.get('--disabled-color'),'');

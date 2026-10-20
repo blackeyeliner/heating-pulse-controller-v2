@@ -44,7 +44,7 @@ export class HeatingPulseThermostatCard extends HTMLElement {
     if (!this._card) return;
     const state = hass.states[this._config.entity];
     const frost = isFrostHeating(state);
-    // Keep the native dial/features visually Off during autonomous heating.
+    // Keep the native mode features Off during autonomous heating.
     // The real HA entity retains its accurate heating action; no service is sent.
     this._card.hass = frost ? {...hass, states: {...hass.states,
       [this._config.entity]: {...state, attributes: {...state.attributes, hvac_action: "off"}}
@@ -64,6 +64,26 @@ export class HeatingPulseThermostatCard extends HTMLElement {
     if (!control) return;
     await control.updateComplete;
     if (card !== this._card || generation !== this._presentationGeneration) return;
+    // Render the dial as Heating only during its synchronous render call.
+    // Keep the native reactive state untouched: mode features, event handlers
+    // and the real entity still see Off. Parent updates cannot overwrite this
+    // presentation because it is applied at render time, not to stateObj.
+    if (!control._pulseOriginalRender && typeof control.render === "function") {
+      control._pulseOriginalRender = control.render;
+      control.render = function() {
+        if (!this._pulseFrostHeating) return this._pulseOriginalRender();
+        const descriptor = Object.getOwnPropertyDescriptor(this, "stateObj");
+        const state = this.stateObj;
+        Object.defineProperty(this, "stateObj", {configurable: true, value: {
+          ...state, state: "heat", attributes: {...state.attributes, hvac_action: "heating"}
+        }});
+        try { return this._pulseOriginalRender(); }
+        finally {
+          if (descriptor) Object.defineProperty(this, "stateObj", descriptor);
+          else delete this.stateObj;
+        }
+      };
+    }
     // Scoped to this native control instance; preserve the native label template
     // for all ordinary states and never replace Lit-owned DOM markers.
     if (!control._pulseOriginalRenderLabel && typeof control._renderLabel === "function") {
@@ -84,8 +104,10 @@ export class HeatingPulseThermostatCard extends HTMLElement {
     for (const mode of ["heat", "off", "active", "inactive"]) {
       control.style?.setProperty(`--state-climate-${mode}-color`, frost ? color : "");
     }
-    control.shadowRoot?.querySelector(".info")?.style.setProperty("color", frost ? color : "");
-    control.shadowRoot?.querySelector("ha-control-circular-slider")?.style.setProperty("--disabled-color", frost ? color : "");
+    // Native Heating styles already colour the status, current-room temperature
+    // and active arc. Preserve the target digits and inactive track colours.
+    control.shadowRoot?.querySelector(".info")?.style.setProperty("color", "");
+    control.shadowRoot?.querySelector("ha-control-circular-slider")?.style.setProperty("--disabled-color", "");
   }
   getCardSize() { return this._card?.getCardSize?.() ?? 5; }
   getGridOptions() { return this._card?.getGridOptions?.() ?? {columns: 6, rows: 4}; }
