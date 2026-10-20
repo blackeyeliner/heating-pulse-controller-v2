@@ -53,9 +53,7 @@ class PulseSensor(PulseEntity, SensorEntity):
         diagnostics = self.runtime.diagnostics()
         if self.key == "valve_position":
             return {
-                "source": "trv_running_state"
-                if self.runtime._off_protection_ready
-                else "pulse_command",
+                "source": "trv_running_state_and_limits",
                 "estimated_opening_percent": diagnostics["estimated_valve_opening"],
                 "position_measured": False,
             }
