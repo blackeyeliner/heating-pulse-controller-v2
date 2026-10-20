@@ -51,10 +51,7 @@ export class HeatingPulseThermostatCard extends HTMLElement {
     }} : hass;
     const color = thermostatColor(state);
     for (const mode of ["heat", "off", "active", "inactive"]) {
-      this._card.style.setProperty(`--state-climate-${mode}-color`, color);
-    }
-    for (const variable of ["--primary-text-color", "--secondary-text-color", "--disabled-color"]) {
-      this._card.style.setProperty(variable, frost ? color : "");
+      this._card.style.setProperty(`--state-climate-${mode}-color`, frost ? "var(--grey-color, #9e9e9e)" : color);
     }
     const generation = this._presentationGeneration = (this._presentationGeneration || 0) + 1;
     this._presentationReady = this._updateProtectionLabel(frost, generation);
@@ -83,6 +80,12 @@ export class HeatingPulseThermostatCard extends HTMLElement {
       control._pulseFrostHeating = frost;
       control.requestUpdate();
     }
+    const color = "var(--red-color, #f44336)";
+    for (const mode of ["heat", "off", "active", "inactive"]) {
+      control.style?.setProperty(`--state-climate-${mode}-color`, frost ? color : "");
+    }
+    control.shadowRoot?.querySelector(".info")?.style.setProperty("color", frost ? color : "");
+    control.shadowRoot?.querySelector("ha-control-circular-slider")?.style.setProperty("--disabled-color", frost ? color : "");
   }
   getCardSize() { return this._card?.getCardSize?.() ?? 5; }
   getGridOptions() { return this._card?.getGridOptions?.() ?? {columns: 6, rows: 4}; }

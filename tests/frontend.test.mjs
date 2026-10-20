@@ -112,12 +112,13 @@ test('frost heating is red and native presentation remains Off without mutating 
   assert.equal(state.attributes.hvac_action,'heating');
   assert.equal(state.attributes.temperature,10);
   assert.equal(state.attributes.heating_target_temperature,23);
-  assert.match(card._card.properties.get('--primary-text-color'),/red/);
+  assert.equal(card._card.properties.has('--primary-text-color'),false);
+  assert.match(card._card.properties.get('--state-climate-off-color'),/grey/);
   assert.equal(card._card.config.features[0].type,'climate-hvac-modes');
   const heating = {...state,state:'heat'};
   card.hass = {states:{'climate.frost':heating}};
   assert.match(thermostatColor(heating),/orange/);
-  assert.equal(card._card.properties.get('--primary-text-color'),'');
+  assert.equal(card._card.properties.has('--primary-text-color'),false);
 });
 
 test('Antifreeze label is scoped and restores the original native label', async () => {
@@ -127,15 +128,25 @@ test('Antifreeze label is scoped and restores the original native label', async 
     const card = new HeatingPulseThermostatCard();
     card.setConfig({entity:'climate.frost'});
     await card._ready;
-    const control = {_renderLabel() { return 'native label'; }, requestUpdate() {this.updates=(this.updates||0)+1;}};
+    const infoProperties=new Map(), sliderProperties=new Map(), controlProperties=new Map();
+    const info={style:{setProperty:(k,v)=>infoProperties.set(k,v)}};
+    const slider={style:{setProperty:(k,v)=>sliderProperties.set(k,v)}};
+    const control = {_renderLabel() { return 'native label'; }, requestUpdate() {this.updates=(this.updates||0)+1;},
+      style:{setProperty:(k,v)=>controlProperties.set(k,v)},
+      shadowRoot:{querySelector: q=>q==='.info'?info:slider}};
     card._card.shadowRoot = {querySelector: () => control};
     card.hass = {states:{'climate.frost':{state:'off',attributes:{hvac_action:'heating',frost_protection_active:true}}}};
     await card._presentationReady;
     assert.equal(control._renderLabel().textContent,'Antifreeze');
     assert.equal(control._renderLabel().className,'label');
+    assert.match(infoProperties.get('color'),/red/);
+    assert.match(sliderProperties.get('--disabled-color'),/red/);
+    assert.equal(card._card.properties.has('--primary-text-color'),false);
     card.hass = {states:{'climate.frost':{state:'off',attributes:{hvac_action:'off',frost_protection_active:true}}}};
     await card._presentationReady;
     assert.equal(control._renderLabel(),'native label');
     assert.equal(control.updates,2);
+    assert.equal(infoProperties.get('color'),'');
+    assert.equal(sliderProperties.get('--disabled-color'),'');
   } finally {globalThis.document=previousDocument;}
 });
