@@ -127,12 +127,4 @@ class PulseClimate(PulseEntity, ClimateEntity):
         self.runtime._notify()
 
     async def async_set_hvac_mode(self, hvac_mode):
-        self.runtime.request.validate(hvac_mode, self.runtime.request.target)
-        if hvac_mode == HVACMode.OFF:
-            self.runtime._resume_pending = False
-            self.runtime.enabled = False  # Inhibit in-flight opens before persistence.
-        await self.runtime.request.set(hvac_mode, self.runtime.request.target)
-        await self.runtime.set_enabled(
-            hvac_mode == HVACMode.HEAT, frost_protection=hvac_mode == HVACMode.OFF
-        )
-        self.runtime._notify()
+        await self.runtime.set_native_mode(hvac_mode)

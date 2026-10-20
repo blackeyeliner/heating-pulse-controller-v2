@@ -27,8 +27,23 @@ class SonoffActuator:
         self.config = config
         self.commanded_open: bool | None = None
         self.feedback_timeout = 15
+        self.physical_controls = None
 
     async def _call(self, domain: str, service: str, data: dict):
+        if self.physical_controls is not None and data.get("entity_id") == self.config[CONF_TRV]:
+            state = self.hass.states.get(self.config[CONF_TRV])
+            if (
+                service == "set_hvac_mode"
+                and state is not None
+                and state.state != data["hvac_mode"]
+            ):
+                self.physical_controls.expect("mode", data["hvac_mode"])
+            elif (
+                service == "set_temperature"
+                and state is not None
+                and state.attributes.get("temperature") != data["temperature"]
+            ):
+                self.physical_controls.expect("target", data["temperature"])
         async with asyncio.timeout(5):
             await self.hass.services.async_call(domain, service, data, blocking=True)
 
@@ -191,6 +206,26 @@ class SonoffActuator:
         await self._limit(CONF_OPENING, self.config[CONF_OPEN_VALUE])
         # Firmware may now open for frost protection; do not claim physical closure.
         self.commanded_open = None
+
+    async def sync_heat(self, target, permitted):
+        """Keep local display usable even between pulses, with closed limits."""
+        for field, service, data in [
+            ("temperature", "set_temperature", {"temperature": target}),
+            ("state", "set_hvac_mode", {"hvac_mode": "heat"}),
+        ]:
+            if not permitted():
+                return
+            state = self.hass.states.get(self.config[CONF_TRV])
+            current = (
+                state.state
+                if field == "state" and state
+                else state.attributes.get(field)
+                if state
+                else None
+            )
+            desired = "heat" if field == "state" else target
+            if current != desired:
+                await self._call("climate", service, {"entity_id": self.config[CONF_TRV], **data})
 
     async def open(self, target: float, permitted: Callable[[], bool]):
         """Recheck inhibition between awaits so a queued off always wins."""

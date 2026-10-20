@@ -36,6 +36,7 @@ from .const import (
 )
 from .emergency import Emergency
 from .engine import Controller, Settings
+from .physical import PhysicalControls
 from .reconnect import Reconnect
 from .thermostat import CONF_NATIVE, RoomRequest
 from .window import cold_reason, is_window_open
@@ -57,6 +58,8 @@ class Runtime:
         )
         self.engine = Controller(settings)
         self.actuator = SonoffActuator(hass, self.config)
+        self.physical = PhysicalControls(self)
+        self.actuator.physical_controls = self.physical if self.native else None
         self.store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
         self.enabled = False
         self._resume_pending = False
@@ -290,6 +293,8 @@ class Runtime:
         entity_id = event.data["entity_id"]
         state = event.data.get("new_state")
         old = event.data.get("old_state")
+        if self.native and entity_id == self.config[CONF_TRV]:
+            self.physical.observe(old, state)
         if entity_id in self._sensor_ids:
             # MQTT force_update emits state_changed for an identical value and
             # identical attributes, rather than state_reported. Count it once.
@@ -678,6 +683,10 @@ class Runtime:
         async with self._lock:
             if self._closed:
                 return
+            # A coalesced physical request applies next. Do not write the old
+            # room target back over the user's new dial value in the meantime.
+            if self.physical.pending is not None:
+                return
             before = self.engine.revision
             previous = (self.engine.phase, self.engine.reason)
             self._restore_cooling_if_ready()
@@ -723,6 +732,26 @@ class Runtime:
                     return
             if self._owned:
                 try:
+                    if (
+                        self.native
+                        and self.enabled
+                        and self.request.mode == "heat"
+                        and not self.engine.fault
+                        and self._guards_clear()
+                    ):
+                        state = self.hass.states.get(self.config[CONF_TRV])
+                        if state is not None and state.state != "heat":
+                            await self.actuator.close()
+                        await self.actuator.sync_heat(
+                            target,
+                            lambda: (
+                                self.enabled
+                                and not self._closed
+                                and self.request.mode == "heat"
+                                and not self.engine.fault
+                                and self._guards_clear()
+                            ),
+                        )
                     if self.engine.wants_open and self.actuator.commanded_open is not True:
                         await self.actuator.open(target, self._permitted)
                         if not self._permitted():
@@ -747,6 +776,18 @@ class Runtime:
                 _LOGGER.info("%s: %s (%s)", self.entry.title, self.engine.phase, self.engine.reason)
             self._arm_window_deadline()
             self._notify()
+
+    async def set_native_mode(self, mode, target=None):
+        if self._closed:
+            raise HomeAssistantError("Controller is unloaded")
+        target = self.request.target if target is None else target
+        self.request.validate(mode, target)
+        if mode == "off":
+            self._resume_pending = False
+            self.enabled = False
+        await self.request.set(mode, target)
+        await self.set_enabled(mode == "heat", frost_protection=mode == "off")
+        self._notify()
 
     async def set_enabled(self, enabled: bool, *, frost_protection: bool = False):
         if not enabled:
@@ -827,6 +868,8 @@ class Runtime:
             return
         self.enabled = False
         self._closed = True
+        self.physical.closed = True
+        self.physical.pending = None
         if self._window_deadline_cancel:
             self._window_deadline_cancel()
             self._window_deadline_cancel = None
@@ -859,6 +902,7 @@ class Runtime:
                         stored["cooling"] = checkpoint
                         stored["cooling_context"] = self._cooling_context()
                 await self.store.async_save(stored)
+        await self.physical.stop()
         await self.emergency.stop()
         pending = [task for task in self._tasks if task is not asyncio.current_task()]
         if pending:
