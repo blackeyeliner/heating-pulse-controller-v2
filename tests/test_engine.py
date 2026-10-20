@@ -213,6 +213,110 @@ def test_minute_reports_can_confirm_plateau_without_fabricated_ticks():
     assert c.stop_temperature == pytest.approx(32)
 
 
+@pytest.mark.parametrize("interval", [10, 30, 60])
+def test_plateau_confirmation_uses_elapsed_time_not_three_report_minimum(interval):
+    c = Controller()
+    for t in range(0, 601, interval):
+        step(c, t, min(40, 20 + t / 15))
+        if c._candidate:
+            first = c._candidate[0].at
+        if not c.wants_open:
+            break
+    assert c.reason == "plateau"
+    assert t - first == 60
+
+
+@pytest.mark.parametrize(
+    ("samples", "closed_at"),
+    [
+        (
+            [
+                (0, 29.3),
+                (42, 30.3),
+                (52, 31.4),
+                (62, 32.5),
+                (72, 33.5),
+                (82, 34.6),
+                (93, 36.1),
+                (112, 37.5),
+                (123, 38.9),
+                (142, 40.1),
+                (154, 41.3),
+                (178, 42.4),
+                (198, 43.4),
+                (228, 44.4),
+                (278, 45.4),
+                (339, 46.1),
+                (399, 46.6),
+                (460, 46.6),
+                (520, 46.6),
+                (580, 46.5),
+            ],
+            580,
+        ),
+        (
+            [
+                (0, 30.4),
+                (46, 31.8),
+                (56, 32.9),
+                (66, 34.1),
+                (76, 35.1),
+                (86, 36.3),
+                (96, 37.4),
+                (106, 38.6),
+                (116, 39.6),
+                (126, 40.6),
+                (138, 41.9),
+                (157, 42.9),
+                (177, 44.0),
+                (207, 45.1),
+                (267, 46.1),
+                (328, 46.3),
+                (387, 46.3),
+                (448, 46.5),
+                (508, 46.7),
+                (569, 46.9),
+                (629, 47.2),
+                (689, 47.3),
+                (750, 47.3),
+                (810, 47.2),
+            ],
+            810,
+        ),
+    ],
+)
+@pytest.mark.parametrize("ordinary", [False, True])
+def test_living_room_recorded_peaks_close_before_timeout(samples, closed_at, ordinary):
+    """Oct 20 traces, rounded to seconds; replay stops at first closure.
+
+    The second curve resumes rising at 448s: a lagging flat regression must
+    not accept that shoulder as the final plateau.
+    """
+    c = Controller(replace(Settings(), max_open_seconds=900, bootstrap_lag=60))
+    c.set_restart_gate(31)
+    if ordinary:
+        valid_reference(c, top=60)
+    for t, temperature in samples:
+        step(c, t, temperature)
+        if t < closed_at:
+            assert c.wants_open
+    assert c.phase == Phase.SETTLING
+    assert c.reason == "plateau"
+    assert c.reference.measured_at == closed_at
+    assert c.stop_temperature < c.reference.temperature
+    assert c._recovery_reason is None
+
+
+def test_slow_decline_after_warming_confirms_plateau():
+    c = Controller()
+    for t in range(0, 301, 30):
+        step(c, t, 20 + t / 15)
+    for t, value in [(360, 40), (420, 40), (480, 40), (540, 39.9)]:
+        step(c, t, value)
+    assert c.reason == "plateau"
+    assert c.reference.temperature == pytest.approx(39.95)
+
+
 def test_gap_discards_earlier_warming_so_flat_after_gap_is_not_calibration():
     c = Controller()
     for t in range(0, 301, 30):

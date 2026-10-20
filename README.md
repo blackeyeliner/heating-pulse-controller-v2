@@ -98,7 +98,7 @@ Defaults are provisional commissioning values:
 | Remaining surface temperature excess | 30% | Cooling gate |
 | Initial / maximum usable lag | 120 / 300 seconds | Early-closing compensation |
 | Trend window | 180 seconds | Regression over actual timestamps |
-| Plateau confirmation | ≥60 seconds and ≥3 qualifying samples | Reject isolated flat readings |
+| Plateau confirmation | ≥60 seconds between fresh qualifying reports | Rolling fit and confirmation segment must both flatten |
 | Plateau slope / relative slope | ≤0.15 °C/min / ≤20% | Both conditions must hold |
 | Prior warming / rising slope | ≥3 °C / ≥0.5 °C/min | Reject flat cold starts |
 | Maximum gap in a usable curve | 120 seconds | Discard interrupted curve evidence |
@@ -107,7 +107,7 @@ Defaults are provisional commissioning values:
 | Peak confirmation | ≥0.2 °C decline after ≥60 seconds | Confirm the end of residual warming |
 | Startup surface excess | ≤3 °C above room | Cold-start cooling gate |
 
-A negative slope tolerance of 0.08 °C/min accommodates noise; sustained cooling is not a plateau. Tuning is editable through **Configure**. Saving options reloads the integration, closes an owned valve, disables control and invalidates calibration if algorithm settings changed.
+A gently declining top is eligible down to the greater of the fall tolerance and absolute plateau slope (defaults: −0.15 °C/min). The rolling fit also bounds total decline, and the confirmation segment must itself flatten; a lagging fit cannot confirm renewed rapid warming. Rapid cooling, missing reports and a cold flat start cannot calibrate. Confirmation uses elapsed report time, so minute-spaced reports do not silently double the configured minute. Tuning is editable through **Configure**. Saving options reloads the integration and closes an owned valve; compatible enabled intent is preserved, while changed algorithm settings invalidate calibration.
 
 The ordinary closing threshold comes from the observed calibration trace at estimated plateau onset minus residual delay. Several usable post-close peaks refine the delay; diagnostic pulses do not. No extrapolation is allowed: an unidentifiable threshold causes `unusable_calibration`, requiring review rather than guessed heating commands.
 

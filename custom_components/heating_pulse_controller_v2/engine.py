@@ -502,18 +502,33 @@ class Controller:
             last.value - self._trace[0].value >= cfg.min_rise
             and self._max_slope >= cfg.min_rising_slope
         )
+        upper_slope = min(cfg.plateau_slope, self._max_slope * cfg.plateau_ratio)
+        # A gently declining top is still a useful plateau. Keep rapid cooling
+        # ineligible: it is not evidence of a stable supply reference.
+        lower_slope = -max(cfg.fall_tolerance, cfg.plateau_slope)
+        drop_band = max(cfg.peak_drop, cfg.plateau_slope * cfg.trend_window / 60)
         flat = (
             self.trend is not None
-            and -cfg.fall_tolerance
-            <= self.trend
-            <= min(cfg.plateau_slope, self._max_slope * cfg.plateau_ratio)
-            and recent[-1].value >= recent[0].value - cfg.peak_drop
+            and lower_slope <= self.trend <= upper_slope
+            and recent[-1].value >= recent[0].value - drop_band
         )
         if not rising or not flat:
             self._candidate.clear()
             return False
         self._candidate.append(last)
-        return len(self._candidate) >= 3 and last.at - self._candidate[0].at >= cfg.plateau_seconds
+        first = self._candidate[0]
+        elapsed = last.at - first.at
+        if elapsed <= 0:
+            return False
+        # The rolling fit can lag renewed growth. Require the confirmation
+        # segment itself to be flat too, rather than trusting the fit alone.
+        confirmation_slope = 60 * (last.value - first.value) / elapsed
+        if not lower_slope <= confirmation_slope <= upper_slope:
+            self._candidate[:] = [last]
+            return False
+        # Two fresh reports a minute apart confirm a minute; requiring three
+        # would silently double confirmation time for minute-reporting sensors.
+        return elapsed >= cfg.plateau_seconds
 
     def _accept_reference(self, now: float):
         self._retry_calibration = False
