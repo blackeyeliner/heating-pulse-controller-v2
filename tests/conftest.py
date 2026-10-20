@@ -58,7 +58,11 @@ def devices(hass, config):
     hass.states.async_set(
         "climate.room", "heat", {"temperature": 24, "hvac_modes": ["off", "heat"]}
     )
-    hass.states.async_set("climate.trv", "off", {"temperature": 14, "hvac_modes": ["off", "heat"]})
+    hass.states.async_set(
+        "climate.trv",
+        "off",
+        {"temperature": 14, "hvac_modes": ["off", "heat"], "hvac_action": "idle"},
+    )
     for key, value in [("number.opening", 0), ("number.closing", 100)]:
         hass.states.async_set(key, value, {"min": 0, "max": 100, "step": 1})
     hass.states.async_set("input_number.valve", 0)

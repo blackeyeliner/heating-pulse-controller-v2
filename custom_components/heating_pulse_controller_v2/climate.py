@@ -83,6 +83,11 @@ class PulseClimate(PulseEntity, ClimateEntity):
         if r.engine.fault or r.reconnect.active or r.control_requested and not r.enabled:
             return None  # Do not claim a closed valve when its state is uncertain.
         if self.hvac_mode == HVACMode.OFF:
+            if r._off_protection_ready:
+                heating = r.frost_heating
+                return (
+                    None if heating is None else HVACAction.HEATING if heating else HVACAction.OFF
+                )
             return HVACAction.OFF
         return HVACAction.HEATING if r.actuator.commanded_open is True else HVACAction.IDLE
 

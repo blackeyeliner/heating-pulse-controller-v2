@@ -183,3 +183,5 @@ uv run python tools/replay_history.py history.json \
 Input is the HA history response array or an object containing it under `data`. Include explicit UTC start/end times when fetching history. Replay checks the detector on the original open intervals; it cannot predict temperatures under different commands or estimate savings.
 
 CI runs lint, formatting, the test suite and packaging on Linux. See [GitHub Actions](https://github.com/blackeyeliner/heating-pulse-controller-v2/actions/workflows/check.yml) for results on each published commit. Before upgrading HA, run tests against the proposed target release and inspect relevant developer API changes. After sensor relocation, valve recalibration or firmware changes, recheck reporting and discard old calibration as appropriate.
+
+Firmware frost activity appears on the existing logical valve graph (0 idle /5 heating) and thermostat heating colour. The valve sensor attribute `estimated_opening_percent` selects the configured end position from TRV running state; it is not a measured stem position (`position_measured: false`). Unknown activity remains unknown.

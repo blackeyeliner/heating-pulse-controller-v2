@@ -246,6 +246,8 @@ class Runtime:
             watched.append(self.config[CONF_WINDOW])
         if self.native and self.frost_entity:
             watched.append(self.frost_entity)
+        if self.native:
+            watched.extend(self.config[k] for k in (CONF_TRV, CONF_OPENING, CONF_CLOSING))
         self._unsub.extend(
             [
                 async_track_state_change_event(self.hass, watched, self._state_event),
@@ -541,6 +543,40 @@ class Runtime:
         try:
             value = float(state.state)
             return value if math.isfinite(value) and 4 <= value <= 35 else None
+        except AttributeError, TypeError, ValueError:
+            return None
+
+    @property
+    def frost_heating(self):
+        """Firmware-reported demand, not measured valve stem position."""
+        if not self._off_protection_ready or self.reconnect.active or self.engine.fault:
+            return None
+        state = self.hass.states.get(self.config[CONF_TRV])
+        if state is None or state.state != "off":
+            return None
+        action = state.attributes.get("hvac_action")
+        if action == "heating":
+            return True
+        if action in ("idle", "off"):
+            return False
+        return None
+
+    @property
+    def estimated_opening(self):
+        """Configured end position selected by firmware demand, never stem feedback."""
+        state = self.hass.states.get(self.config[CONF_TRV])
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        action = state.attributes.get("hvac_action")
+        if action not in ("heating", "idle", "off"):
+            return None
+        key = CONF_OPENING if action == "heating" else CONF_CLOSING
+        limit = self.hass.states.get(self.config[key])
+        try:
+            value = float(limit.state)
+            if not math.isfinite(value) or not 0 <= value <= 100:
+                return None
+            return value if key == CONF_OPENING else 100 - value
         except AttributeError, TypeError, ValueError:
             return None
 
@@ -848,9 +884,14 @@ class Runtime:
             ),
             "enabled": self.enabled,
             "commanded_open": self.actuator.commanded_open,
-            "valve_position": None
-            if self.actuator.commanded_open is None
-            else (5 if self.actuator.commanded_open else 0),
+            "valve_position": (
+                (5 if self.frost_heating else 0)
+                if self.frost_heating is not None
+                else None
+                if self.actuator.commanded_open is None
+                else (5 if self.actuator.commanded_open else 0)
+            ),
+            "estimated_valve_opening": self.estimated_opening,
             "reporting_verified": self.config.get(CONF_REPORTS, False),
             "cooling_restore_status": self._cooling_restore_status,
             "window_status": (

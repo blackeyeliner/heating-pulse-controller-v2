@@ -380,3 +380,20 @@ async def test_enabled_controller_with_off_thermostat_restores_protection_after_
     assert hass.states.get("number.opening").state == "21"
     assert hass.states.get("number.closing").state == "100"
     await d.stop()
+
+
+@pytest.mark.parametrize(
+    ("action", "logical", "estimated", "hvac"),
+    [("idle", 0, 0, "off"), ("heating", 5, 21, "heating"), (None, None, None, None)],
+)
+async def test_autonomous_frost_telemetry(hass, entry, devices, action, logical, estimated, hvac):
+    r, c = await native(hass, entry)
+    await c.async_set_hvac_mode("off")
+    state = hass.states.get("climate.trv")
+    hass.states.async_set("climate.trv", "off", {**state.attributes, "hvac_action": action})
+    await r._process()
+    assert r.diagnostics()["valve_position"] == logical
+    assert r.estimated_opening == estimated
+    assert c.hvac_mode == "off" and c.hvac_action == hvac
+    assert not r.engine.wants_open and not r.enabled
+    await r.stop()
