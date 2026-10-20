@@ -96,6 +96,13 @@ class PulseClimate(PulseEntity, ClimateEntity):
         return {
             "requested_hvac_mode": self.runtime.request.mode,
             "control_enabled": self.runtime.control_requested,
+            "physical_controls": (
+                "mqtt"
+                if self.runtime.physical.unsubscribe is not None
+                else "waiting_mqtt"
+                if self.runtime.physical.mqtt
+                else "state"
+            ),
             "controller_phase": self.runtime.diagnostics()["phase"],
             "heating_target_temperature": self.runtime.request.target,
             "frost_protection_temperature": self.runtime.frost_temperature,

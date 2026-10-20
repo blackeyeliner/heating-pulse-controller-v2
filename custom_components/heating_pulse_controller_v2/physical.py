@@ -1,11 +1,15 @@
 """Local TRV changes as room requests, excluding our own command feedback."""
 
 import asyncio
+import json
 import logging
 import math
 
-from homeassistant.core import callback
+from homeassistant.core import State, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+
+from .const import CONF_OPENING, CONF_TRV
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -18,6 +22,53 @@ class PhysicalControls:
         self.task = None
         self.closed = False
         self.debounce = 0.4
+        self.mqtt = False
+        self.unsubscribe = None
+        self.baseline = None
+        self.retry_at = 0
+        self.starting = False
+
+    async def start(self):
+        r = self.runtime
+        if self.closed or self.unsubscribe is not None or self.starting or r.now() < self.retry_at:
+            return
+        if not r.native or "mqtt" not in r.hass.config.components:
+            return
+        binding = er.async_get(r.hass).async_get(r.config[CONF_OPENING])
+        if not r.native or binding is None or binding.platform != "mqtt":
+            return
+        self.mqtt = True
+        self.baseline = r.hass.states.get(r.config[CONF_TRV])
+        self.starting = True
+        self.retry_at = r.now() + 60
+        try:
+            self.unsubscribe = await r.actuator._subscribe_probe(self.receive)
+            _LOGGER.info("%s: physical MQTT controls subscribed", r.entry.title)
+        except HomeAssistantError:
+            # No state-event fallback for an MQTT valve: it loses the retain flag.
+            _LOGGER.warning("Physical MQTT controls waiting for discovery for %s", r.entry.title)
+        finally:
+            self.starting = False
+
+    @callback
+    def receive(self, message):
+        try:
+            data = json.loads(message.payload)
+            mode = data["system_mode"]
+            target = data["occupied_heating_setpoint"]
+            if mode not in {"off", "heat", "auto"}:
+                return
+        except ValueError, TypeError, KeyError:
+            return
+        new = State(self.runtime.config[CONF_TRV], mode, {"temperature": target})
+        old, self.baseline = self.baseline, new
+        if not message.retain:
+            self._observe(old, new)
+
+    @callback
+    def observe(self, old, new):
+        if not self.mqtt:
+            self._observe(old, new)
 
     def expect(self, field, value):
         """Register before a write: MQTT feedback often arrives during the call."""
@@ -44,7 +95,7 @@ class PhysicalControls:
             return None
 
     @callback
-    def observe(self, old, new):
+    def _observe(self, old, new):
         r = self.runtime
         if self.closed or r._closed or not r.native:
             return
@@ -107,6 +158,9 @@ class PhysicalControls:
     async def stop(self):
         self.closed = True
         self.pending = None
+        if self.unsubscribe is not None:
+            self.unsubscribe()
+            self.unsubscribe = None
         if self.task is not None and not self.task.done():
             # Let an in-flight safe close finish; runtime is already inhibited.
             await self.task

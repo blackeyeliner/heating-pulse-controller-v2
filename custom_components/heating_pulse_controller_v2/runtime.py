@@ -260,6 +260,8 @@ class Runtime:
             ]
         )
 
+        await self.physical.start()
+
     @callback
     def subscribe(self, listener):
         self._listeners.add(listener)
@@ -683,6 +685,7 @@ class Runtime:
         async with self._lock:
             if self._closed:
                 return
+            await self.physical.start()
             # A coalesced physical request applies next. Do not write the old
             # room target back over the user's new dial value in the meantime.
             if self.physical.pending is not None:

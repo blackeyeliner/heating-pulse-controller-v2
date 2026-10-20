@@ -169,3 +169,105 @@ async def test_physical_off_inhibits_an_inflight_open(hass, entry, devices):
     assert r.request.mode == "off" and not r.control_requested
     assert r._off_protection_ready and r.actuator.commanded_open is None
     await r.stop()
+
+
+async def test_retained_mqtt_updates_only_baseline_and_never_enable(hass, entry, devices):
+    import json
+    from types import SimpleNamespace
+
+    r, c = await native(hass, entry)
+    r.physical.mqtt = True
+    r.physical.debounce = 0
+    r.physical.baseline = hass.states.get("climate.trv")
+
+    def receive(mode, target, retain=False):
+        r.physical.receive(
+            SimpleNamespace(
+                payload=json.dumps({"system_mode": mode, "occupied_heating_setpoint": target}),
+                retain=retain,
+            )
+        )
+
+    receive("heat", 25, retain=True)
+    await settle(hass, r)
+    assert not r.control_requested and r.request.mode == "off"
+    receive("off", 10, retain=True)
+    receive("heat", 24)  # Fresh local change after retained baseline.
+    await settle(hass, r)
+    assert r.enabled and r.request.target == 24
+    receive("auto", 16)
+    await settle(hass, r)
+    assert not r.enabled and r.request.mode == "off"
+    # HA-derived state callbacks cannot bypass retained filtering.
+    r.physical.observe(
+        State("climate.trv", "off"), State("climate.trv", "heat", {"temperature": 30})
+    )
+    await settle(hass, r)
+    assert not r.enabled
+    await r.stop()
+
+
+async def test_mqtt_subscription_retries_discovery_and_unsubscribes(hass, entry, devices):
+    from unittest.mock import AsyncMock, Mock
+
+    from homeassistant.exceptions import HomeAssistantError
+    from homeassistant.helpers import entity_registry as er
+    from test_integration import setup_hass
+
+    r, c = await native(hass, entry)
+    await setup_hass(hass)
+    hass.config.components.add("mqtt")
+    binding = er.async_get(hass).async_get_or_create(
+        "number", "mqtt", "opening", suggested_object_id="opening"
+    )
+    r.config["opening_entity"] = binding.entity_id
+    unsubscribe = Mock()
+    r.actuator._subscribe_probe = AsyncMock(
+        side_effect=[HomeAssistantError("Not discovered"), unsubscribe]
+    )
+    await r.physical.start()
+    assert r.physical.mqtt and r.physical.unsubscribe is None
+    await r.physical.start()
+    assert r.actuator._subscribe_probe.await_count == 1
+    r.physical.retry_at = 0
+    await r.physical.start()
+    assert r.physical.unsubscribe is unsubscribe
+    assert c.extra_state_attributes["physical_controls"] == "mqtt"
+    await r.stop()
+    unsubscribe.assert_called_once()
+
+
+async def test_live_mqtt_command_echoes_do_not_turn_into_physical_requests(hass, entry, devices):
+    import json
+    from types import SimpleNamespace
+
+    r, c = await native(hass, entry)
+    r.physical.mqtt = True
+    r.physical.baseline = hass.states.get("climate.trv")
+    original = r.actuator._call
+
+    async def call_and_report(domain, service, data):
+        await original(domain, service, data)
+        state = hass.states.get("climate.trv")
+        r.physical.receive(
+            SimpleNamespace(
+                payload=json.dumps(
+                    {
+                        "system_mode": state.state,
+                        "occupied_heating_setpoint": state.attributes["temperature"],
+                    }
+                ),
+                retain=False,
+            )
+        )
+
+    r.actuator._call = call_and_report
+    await c.async_set_temperature(temperature=23, hvac_mode="heat")
+    await hass.async_block_till_done()
+    assert r.request.mode == "heat" and r.request.target == 23
+    assert r.physical.task is None and r.physical.pending is None
+    await c.async_set_hvac_mode("off")
+    await hass.async_block_till_done()
+    assert r.request.mode == "off" and r._off_protection_ready
+    assert r.physical.task is None
+    await r.stop()

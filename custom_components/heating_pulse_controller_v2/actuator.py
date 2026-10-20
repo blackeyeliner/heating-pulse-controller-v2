@@ -31,7 +31,11 @@ class SonoffActuator:
 
     async def _call(self, domain: str, service: str, data: dict):
         if self.physical_controls is not None and data.get("entity_id") == self.config[CONF_TRV]:
-            state = self.hass.states.get(self.config[CONF_TRV])
+            state = (
+                self.physical_controls.baseline
+                if self.physical_controls.mqtt and self.physical_controls.baseline is not None
+                else self.hass.states.get(self.config[CONF_TRV])
+            )
             if (
                 service == "set_hvac_mode"
                 and state is not None
