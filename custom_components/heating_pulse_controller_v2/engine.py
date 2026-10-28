@@ -326,9 +326,9 @@ class Controller:
             elif now - self.opened_at >= self.settings.max_open_seconds:
                 self.trip("maximum_open_duration", now)
             elif fresh_report and self._plateau():
-                self._accept_reference(now)
-                self._close(now, "plateau")
-                if self.stop_temperature is None:
+                accepted = self._accept_reference(now)
+                self._close(now, "plateau" if accepted else "calibration_rejected")
+                if not accepted and (self.reference is None or self.stop_temperature is None):
                     self.trip("unusable_calibration", now)
             elif (
                 self.phase == Phase.HEATING
@@ -530,8 +530,7 @@ class Controller:
         # would silently double confirmation time for minute-reporting sensors.
         return elapsed >= cfg.plateau_seconds
 
-    def _accept_reference(self, now: float):
-        self._retry_calibration = False
+    def _accept_reference(self, now: float) -> bool:
         temperature = median(s.value for s in self._candidate)
         # Backtrack the near-plateau segment instead of confusing the trend-window
         # confirmation delay with thermal inertia. The onset is still an estimate.
@@ -543,27 +542,36 @@ class Controller:
             if abs(sample.value - temperature) > band:
                 break
             knee_at = sample.at
-        self.reference = Reference(
+        candidate = Reference(
             temperature=temperature,
             measured_at=now,
             knee_at=knee_at,
             trace=list(self._trace),
         )
-        self._update_stop()
+        cutoff = self._stop_for(candidate)
+        if cutoff is None:
+            # A falling tail may look flat while lag compensation lands above
+            # it. Do not destroy a usable reference or refresh its age clock.
+            self._retry_calibration = True
+            self.revision += 1
+            return False
+        self.reference, self.stop_temperature = candidate, cutoff
+        self._retry_calibration = False
         self.revision += 1
+        return True
 
-    def _update_stop(self):
-        if self.reference is None:
-            self.stop_temperature = None
-            return
-        value = interpolate(self.reference.trace, self.reference.knee_at - self.lag)
-        # Offset must land on observed warming and below the accepted reference.
-        self.stop_temperature = (
+    def _stop_for(self, reference):
+        if reference is None:
+            return None
+        value = interpolate(reference.trace, reference.knee_at - self.lag)
+        return (
             value
-            if value is not None
-            and self.reference.trace[0].value < value < self.reference.temperature
+            if value is not None and reference.trace[0].value < value < reference.temperature
             else None
         )
+
+    def _update_stop(self):
+        self.stop_temperature = self._stop_for(self.reference)
 
     def _close(self, now: float, reason: str):
         self._learn_lag = (
@@ -688,6 +696,17 @@ class Controller:
 
     def recovery_permits_open(self, now: float):
         return self.phase == Phase.RECOVERY_HEATING and now < self._recovery_deadline
+
+    def discard_open_learning(self, now):
+        """A corrected actuator interruption must not teach a supply reference."""
+        self._candidate.clear()
+        self._trace.clear()
+        self._max_slope = 0
+        self.trend = None
+        self._learn_lag = False
+        if self.wants_open and self.radiator is not None:
+            self._trace.append(Sample(now, self.radiator.value))
+        self.revision += 1
 
     def suspend_valve(self):
         """Abandon an untrustworthy pulse without declaring a critical fault."""

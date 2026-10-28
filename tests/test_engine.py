@@ -481,3 +481,50 @@ def test_beta3_calibration_restores_with_adaptation_disabled():
 def test_invalid_adaptive_settings(changes):
     with pytest.raises(ValueError):
         replace(Settings(), **changes)
+
+
+@pytest.mark.parametrize("existing", [True, False])
+def test_declining_tail_candidate_is_validated_before_replacing_reference(existing):
+    c = Controller(replace(Settings(), bootstrap_lag=60))
+    if existing:
+        valid_reference(c, at=0, top=41.45)
+    old_reference = c.reference
+    old_cutoff = c.stop_temperature
+    c.phase = Phase.CALIBRATING
+    c.opened_at = 1000
+    # Living Room, 2026-10-26: actual irregular report cadence is material
+    # to the rolling trend and falling-tail acceptance boundary.
+    values = [
+        (43.454, 28.1),
+        (54.536, 29.4),
+        (73.67, 30.6),
+        (84.751, 31.9),
+        (103.886, 32.9),
+        (114.967, 33.9),
+        (139.133, 35.0),
+        (159.274, 36.0),
+        (179.415, 37.0),
+        (209.62, 38.1),
+        (244.862, 39.1),
+        (300.223, 40.1),
+        (360.573, 40.4),
+        (420.929, 40.1),
+        (481.327, 39.8),
+        (541.663, 39.6),
+        (602.028, 39.4),
+        (662.39, 39.3),
+        (722.778, 39.2),
+    ]
+    c._trace.append(Sample(1000, 26.9))
+    for seconds, value in values:
+        step(c, 1000 + seconds, value)
+    assert not c.wants_open and c._retry_calibration
+    if existing:
+        assert c.reference is old_reference and c.stop_temperature == old_cutoff
+        assert c.reference.measured_at == 0 and c.reason == "calibration_rejected"
+        assert c._recovery_reason is None
+        d = Controller(c.settings)
+        assert d.restore(c.dump(), 1800)
+        assert d._retry_calibration and d.reference.temperature == 41.45
+    else:
+        assert c.reference is None and c._recovery_reason == "unusable_calibration"

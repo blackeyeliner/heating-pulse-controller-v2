@@ -63,6 +63,9 @@ class PulseSensor(PulseEntity, SensorEntity):
             return {
                 key: diagnostics[key]
                 for key in (
+                    "valve_pair_verified_at",
+                    "valve_pair_readback",
+                    "valve_pair_corrections",
                     "recovery_reason",
                     "recovery_resume_at",
                     "max_open_seconds",

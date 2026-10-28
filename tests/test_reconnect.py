@@ -286,27 +286,27 @@ async def test_invalid_pending_state_never_starts_commands(hass, entry, devices,
 async def test_probe_topic_comes_from_selected_entity_discovery(
     hass, entry, devices, monkeypatch, payload, topic
 ):
-    import sys
-    from types import ModuleType, SimpleNamespace
+    from types import SimpleNamespace
     from unittest.mock import Mock
 
+    from homeassistant.components import mqtt
     from homeassistant.helpers import entity_registry as er
 
     from custom_components.heating_pulse_controller_v2.actuator import SonoffActuator
 
-    mqtt = ModuleType("homeassistant.components.mqtt")
     unsub = Mock()
-    mqtt.async_subscribe = AsyncMock(return_value=unsub)
-    mqtt.debug_info = SimpleNamespace(
-        info_for_device=Mock(
+    monkeypatch.setattr(mqtt, "async_subscribe", AsyncMock(return_value=unsub))
+    monkeypatch.setattr(
+        mqtt.debug_info,
+        "info_for_device",
+        Mock(
             return_value={
                 "entities": [
                     {"entity_id": "number.opening", "discovery_data": {"payload": payload}}
                 ]
             }
-        )
+        ),
     )
-    monkeypatch.setitem(sys.modules, "homeassistant.components.mqtt", mqtt)
     monkeypatch.setattr(
         er,
         "async_get",

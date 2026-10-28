@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Callable
 
 from homeassistant.core import HomeAssistant, callback
@@ -17,8 +18,13 @@ from .const import (
     CONF_OUTPUT,
     CONF_TRV,
 )
+from .valve_readback import PairReader
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class PairMismatch(HomeAssistantError):
+    """Fresh device feedback contradicts a requested limit pair."""
 
 
 class SonoffActuator:
@@ -28,6 +34,13 @@ class SonoffActuator:
         self.commanded_open: bool | None = None
         self.feedback_timeout = 15
         self.physical_controls = None
+        self.reader = PairReader(hass, config)
+        self.now = time.monotonic
+        self.last_pair = None
+        self.pair_verified_at = None
+        self._next_pair_check = 0
+        self._checked_feedback = None
+        self.pair_corrections = 0
 
     async def _call(self, domain: str, service: str, data: dict):
         if self.physical_controls is not None and data.get("entity_id") == self.config[CONF_TRV]:
@@ -84,6 +97,70 @@ class SonoffActuator:
             ) from err
         finally:
             unsubscribe()
+
+    def _feedback(self):
+        result = []
+        for key in (CONF_OPENING, CONF_CLOSING):
+            state = self.hass.states.get(self.config[key])
+            result.append((state.state, state.last_updated) if state else None)
+        return tuple(result)
+
+    def reported_pair(self):
+        try:
+            return tuple(
+                float(self.hass.states.get(self.config[k]).state)
+                for k in (CONF_OPENING, CONF_CLOSING)
+            )
+        except AttributeError, TypeError, ValueError:
+            return None
+
+    async def verify_pair(self, opening, closing):
+        self.pair_verified_at = None
+        actual = await self.reader.read()
+        self.last_pair = actual
+        self._checked_feedback = self._feedback()
+        self._next_pair_check = self.now() + 60
+        if actual != (opening, closing):
+            self.pair_verified_at = None
+            raise PairMismatch(
+                f"Valve readback {actual} differs from requested {(opening, closing)}"
+            )
+        self.pair_verified_at = self.now()
+
+    async def monitor(self, target, permitted, on_drift):
+        """Reconcile changed feedback and poll owned open pulses once a minute."""
+        if self.commanded_open is None:
+            return False
+        was_open = self.commanded_open
+        expected = (
+            (self.config[CONF_OPEN_VALUE], self.config[CONF_CLOSE_VALUE]) if was_open else (0, 100)
+        )
+        changed = self._feedback() != self._checked_feedback and self.reported_pair() != expected
+        if not changed and (not was_open or self.now() < self._next_pair_check):
+            return False
+        try:
+            try:
+                await self.verify_pair(*expected)
+                return False  # A stale cached report alone must not trigger a rewrite.
+            except PairMismatch:
+                self.commanded_open = None
+                self.pair_corrections += 1
+                on_drift()
+                _LOGGER.warning(
+                    "Valve limits drifted to %s; reasserting %s", self.last_pair, expected
+                )
+                if was_open and permitted():
+                    await self.open(target, permitted)
+                else:
+                    await self.close()
+                return True
+        except HomeAssistantError, TimeoutError:
+            self.commanded_open = None
+            try:
+                await self.close()
+            except HomeAssistantError, TimeoutError:
+                pass
+            raise
 
     async def _subscribe_probe(self, receive):
         """Use the existing MQTT discovery state topic; never guess a device topic."""
@@ -166,6 +243,11 @@ class SonoffActuator:
                 errors.append(err)
             if key == CONF_OPENING:
                 await asyncio.sleep(0.3)
+        if not errors:
+            try:
+                await self.verify_pair(0, 100)
+            except (HomeAssistantError, TimeoutError) as err:
+                errors.append(err)
         if errors:
             self.commanded_open = None
             # Best-effort extra stop through the physical thermostat.
@@ -208,6 +290,7 @@ class SonoffActuator:
         finally:
             unsubscribe()
         await self._limit(CONF_OPENING, self.config[CONF_OPEN_VALUE])
+        await self.verify_pair(self.config[CONF_OPEN_VALUE], 100)
         # Firmware may now open for frost protection; do not claim physical closure.
         self.commanded_open = None
 
@@ -278,6 +361,10 @@ class SonoffActuator:
                     await self._call(domain, service, data)
                 if domain == "number" and data["entity_id"] == self.config[CONF_OPENING]:
                     await asyncio.sleep(0.3)
+            if not permitted():
+                await self.close()
+                return
+            await self.verify_pair(self.config[CONF_OPEN_VALUE], self.config[CONF_CLOSE_VALUE])
             if not permitted():
                 await self.close()
                 return

@@ -58,6 +58,7 @@ class Runtime:
         )
         self.engine = Controller(settings)
         self.actuator = SonoffActuator(hass, self.config)
+        self.actuator.now = lambda: self.now()
         self.physical = PhysicalControls(self)
         self.actuator.physical_controls = self.physical if self.native else None
         self.store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
@@ -249,8 +250,7 @@ class Runtime:
             watched.append(self.config[CONF_WINDOW])
         if self.native and self.frost_entity:
             watched.append(self.frost_entity)
-        if self.native:
-            watched.extend(self.config[k] for k in (CONF_TRV, CONF_OPENING, CONF_CLOSING))
+        watched.extend(self.config[k] for k in (CONF_TRV, CONF_OPENING, CONF_CLOSING))
         self._unsub.extend(
             [
                 async_track_state_change_event(self.hass, watched, self._state_event),
@@ -705,6 +705,18 @@ class Runtime:
                 if self.reconnect.active or self.engine.fault:
                     self._notify()
                     return
+            if self._owned and not self.reconnect.active and self._guards_clear():
+                try:
+                    await self.actuator.monitor(
+                        target,
+                        self._permitted,
+                        lambda: self.engine.discard_open_learning(self.now()),
+                    )
+                except HomeAssistantError, TimeoutError:
+                    _LOGGER.exception("Valve pair verification failed for %s", self.entry.title)
+                    await self._suspect_valve()
+                    self._notify()
+                    return
             self.engine.evaluate(
                 self.now(),
                 enabled=self.enabled and self._guards_clear(),
@@ -918,6 +930,9 @@ class Runtime:
             **self.engine.diagnostics(self.now()),
             **self.emergency.diagnostics(),
             **self.reconnect.diagnostics(),
+            "valve_pair_verified_at": self.actuator.pair_verified_at,
+            "valve_pair_readback": self.actuator.last_pair,
+            "valve_pair_corrections": self.actuator.pair_corrections,
             **(
                 {"phase": "startup_wait", "reason": "waiting_for_fresh_reports"}
                 if self._resume_pending and not self.reconnect.active and not self.engine.fault
