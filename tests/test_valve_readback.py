@@ -9,6 +9,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.heating_pulse_controller_v2.valve_readback import (
     PairReader,
+    ReadbackTimeout,
     decode_pair,
     discovery_binding,
 )
@@ -123,6 +124,9 @@ async def test_transaction_and_retained_filters_and_cleanup(hass, config, monkey
     monkeypatch.setattr(mqtt, "async_subscribe", subscribe)
     monkeypatch.setattr(mqtt, "async_publish", publish)
     assert await reader._read("custom/base", "0xd44867fffe212209", 50467, 1) == (21, 83)
+    assert not reader._pending
+    unsub.assert_not_called()
+    await reader.stop()
     unsub.assert_called_once()
 
 
@@ -146,8 +150,10 @@ async def test_unrelated_and_retained_only_responses_time_out(hass, config, monk
 
     monkeypatch.setattr(mqtt, "async_subscribe", subscribe)
     monkeypatch.setattr(mqtt, "async_publish", publish)
-    with pytest.raises(TimeoutError):
+    with pytest.raises(ReadbackTimeout, match="transaction="):
         await reader._read("base", "0xd44867fffe212209", 50467, 1)
+    assert not reader._pending
+    await reader.stop()
     unsub.assert_called_once()
 
 
@@ -185,3 +191,116 @@ async def test_mqtt_not_ready_cannot_fall_back_to_cached_values(hass, config, de
     reader = PairReader(hass, {**config, CONF_OPENING: opening.entity_id})
     with pytest.raises(HomeAssistantError, match="not ready"):
         await reader.read()
+
+
+async def test_fast_reply_after_deferred_broker_subscription_and_repeated_reads(
+    hass, config, monkeypatch
+):
+    """Reproduce HA's queued SUBSCRIBE and an immediate Z2M read response."""
+    import asyncio
+
+    from homeassistant.components import mqtt
+
+    queued = {}
+    active = {}
+    unsubscribed = []
+    subscriptions = []
+    requests = []
+    reader = PairReader(hass, config)
+    reader.timeout = 0.05
+    monkeypatch.setattr(reader, "_binding", lambda: ("base", "0xd44867fffe212209"))
+    device = {
+        "ieee_address": "0xd44867fffe212209",
+        "network_address": 50467,
+        "definition": {"model": "TRVZB"},
+        "endpoints": {"1": {"clusters": {"input": ["customSonoffTrvzb"]}}},
+    }
+
+    def activate():
+        batch = dict(queued)
+        queued.clear()
+        active.update(batch)
+        if cb := batch.get("base/bridge/devices"):
+            cb(SimpleNamespace(payload=json.dumps([device]), retain=True))
+
+    async def subscribe(_hass, topic, receive):
+        subscriptions.append(topic)
+        queued[topic] = receive
+        asyncio.get_running_loop().call_later(0.001, activate)
+
+        def unsubscribe():
+            unsubscribed.append(topic)
+            active.pop(topic, None)
+            queued.pop(topic, None)
+
+        return unsubscribe
+
+    async def publish(_hass, topic, payload, **kwargs):
+        req = json.loads(payload)
+        requests.append(req)
+        # With beta25 ordering the response listener is only queued here,
+        # so this real-time reply is lost even though Z2M reports success.
+        if cb := active.get("base/bridge/response/action"):
+            pair = (21, 83) if len(requests) == 1 else (0, 100)
+            cb(
+                SimpleNamespace(
+                    payload=json.dumps(response(req["transaction"], *pair)), retain=False
+                )
+            )
+
+    monkeypatch.setattr(mqtt, "async_subscribe", subscribe)
+    monkeypatch.setattr(mqtt, "async_publish", publish)
+    assert await reader.read() == (21, 83)
+    assert await reader.read() == (0, 100)
+    assert requests[0]["transaction"] != requests[1]["transaction"]
+    assert subscriptions.count("base/bridge/response/action") == 1
+    assert "base/bridge/response/action" not in unsubscribed
+    assert not reader._pending
+    await reader.stop()
+    assert unsubscribed.count("base/bridge/response/action") == 1
+    assert not active and not queued
+
+
+async def test_cancelled_read_and_late_reply_cannot_complete_next_transaction(
+    hass, config, monkeypatch
+):
+    import asyncio
+
+    from homeassistant.components import mqtt
+
+    receive = None
+    requests = []
+    reader = PairReader(hass, config)
+    unsubscribe = Mock()
+
+    async def subscribe(_hass, topic, cb):
+        nonlocal receive
+        receive = cb
+        return unsubscribe
+
+    async def publish(_hass, topic, payload, **kwargs):
+        req = json.loads(payload)
+        requests.append(req)
+        if len(requests) == 2:
+            receive(
+                SimpleNamespace(
+                    payload=json.dumps(response(requests[0]["transaction"])), retain=False
+                )
+            )
+            receive(
+                SimpleNamespace(
+                    payload=json.dumps(response(req["transaction"], 0, 100)), retain=False
+                )
+            )
+
+    monkeypatch.setattr(mqtt, "async_subscribe", subscribe)
+    monkeypatch.setattr(mqtt, "async_publish", publish)
+    first = asyncio.create_task(reader._read("base", "0xd44867fffe212209", 50467, 1))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert not reader._pending
+    assert await reader._read("base", "0xd44867fffe212209", 50467, 1) == (0, 100)
+    await reader.stop()
+    unsubscribe.assert_called_once()

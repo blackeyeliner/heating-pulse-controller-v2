@@ -918,6 +918,7 @@ class Runtime:
                         stored["cooling_context"] = self._cooling_context()
                 await self.store.async_save(stored)
         await self.physical.stop()
+        await self.actuator.reader.stop()
         await self.emergency.stop()
         pending = [task for task in self._tasks if task is not asyncio.current_task()]
         if pending:
@@ -933,6 +934,8 @@ class Runtime:
             "valve_pair_verified_at": self.actuator.pair_verified_at,
             "valve_pair_readback": self.actuator.last_pair,
             "valve_pair_corrections": self.actuator.pair_corrections,
+            "valve_pair_read_misses": self.actuator.pair_read_misses,
+            "valve_pair_read_timeouts": self.actuator.pair_read_timeouts,
             **(
                 {"phase": "startup_wait", "reason": "waiting_for_fresh_reports"}
                 if self._resume_pending and not self.reconnect.active and not self.engine.fault

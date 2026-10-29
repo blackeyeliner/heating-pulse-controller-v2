@@ -128,3 +128,111 @@ async def test_final_open_read_rejects_pair_even_after_both_cached_acks(hass, co
     assert not any(
         domain == "input_number" and data.get("value") == 5 for domain, _, data in devices
     )
+
+
+async def test_two_missing_periodic_replies_retry_without_aborting_calibration(
+    hass, entry, devices
+):
+    from custom_components.heating_pulse_controller_v2.valve_readback import ReadbackTimeout
+
+    r, clock = await running(hass, entry)
+    opened = r.engine.opened_at
+    original = r.actuator.reader.read
+    proof = r.actuator.pair_verified_at
+    mark = len(devices)
+    r.actuator.reader.read = AsyncMock(side_effect=ReadbackTimeout("missed reply"))
+    clock[0] += 60
+    await r._process()
+    assert r.actuator.pair_read_misses == 1
+    assert r.actuator.pair_verified_at == proof
+    assert r.engine.opened_at == opened and r.engine.wants_open
+    assert not r.reconnect.active and len(devices) == mark
+    clock[0] += 4
+    await r._process()
+    assert r.actuator.reader.read.await_count == 1
+    clock[0] += 1
+    await r._process()
+    assert r.actuator.pair_read_misses == 2 and not r.reconnect.active
+    assert r.engine.opened_at == opened and len(devices) == mark
+    r.actuator.reader.read = original
+    clock[0] += 5
+    await r._process()
+    assert r.actuator.pair_read_misses == 0 and r.actuator.pair_read_timeouts == 2
+    assert r.engine.opened_at == opened and r.engine.wants_open
+    assert not r.reconnect.active and len(devices) == mark
+    await r.stop()
+
+
+async def test_third_missing_periodic_reply_closes_and_enters_existing_grace(hass, entry, devices):
+    from custom_components.heating_pulse_controller_v2.valve_readback import ReadbackTimeout
+
+    r, clock = await running(hass, entry)
+    original = r.actuator.reader.read
+
+    async def missing_only_while_open():
+        pair = await original()
+        if pair == (21, 83):
+            raise ReadbackTimeout("no diagnostic reply")
+        return pair
+
+    r.actuator.reader.read = missing_only_while_open
+    clock[0] += 60
+    for n in range(1, 4):
+        await r._process()
+        if n < 3:
+            assert r.engine.wants_open and not r.reconnect.active
+        clock[0] += 5
+    assert r.reconnect.active and r.reconnect.record["attempts"] == 0
+    assert not r.emergency.active and not r.engine.wants_open
+    assert r.actuator.last_pair == (0, 100) and r.actuator.pair_read_timeouts == 3
+    await r.stop()
+
+
+async def test_missing_reply_with_conflicting_feedback_is_not_tolerated(hass, entry, devices):
+    from custom_components.heating_pulse_controller_v2.valve_readback import ReadbackTimeout
+
+    r, clock = await running(hass, entry)
+    original = r.actuator.reader.read
+
+    async def missing_unless_closed():
+        pair = await original()
+        if pair != (0, 100):
+            raise ReadbackTimeout("unconfirmed drift")
+        return pair
+
+    r.actuator.reader.read = missing_unless_closed
+    state = hass.states.get("number.opening")
+    hass.states.async_set("number.opening", 0, state.attributes)
+    await hass.async_block_till_done()
+    assert r.reconnect.active and not r.engine.wants_open
+    assert r.actuator.last_pair == (0, 100)
+    await r.stop()
+
+
+async def test_missing_diagnostic_cannot_extend_fifteen_minute_deadline(hass, entry, devices):
+    from custom_components.heating_pulse_controller_v2.valve_readback import ReadbackTimeout
+
+    entry.data["max_open_seconds"] = 900
+    r, clock = await running(hass, entry)
+    original = r.actuator.reader.read
+    opened = r.engine.opened_at
+
+    async def missing_only_while_open():
+        pair = await original()
+        if pair == (21, 83):
+            raise ReadbackTimeout("missing")
+        return pair
+
+    # A recent successful proof is required to tolerate a miss.
+    clock[0] = opened + 895
+    await r.actuator.verify_pair(21, 83)
+    r.actuator.reader.read = missing_only_while_open
+    clock[0] = opened + 900
+    r.actuator._next_pair_check = clock[0]
+    r.engine.room_report(20, clock[0])
+    r.engine.radiator_report(20, clock[0])
+    await r._process()
+    assert not r.engine.wants_open and not r.reconnect.active
+    assert r.engine.diagnostics(clock[0])["recovery_reason"] == "maximum_open_duration"
+    assert r.actuator.last_pair == (0, 100)
+    await r.stop()

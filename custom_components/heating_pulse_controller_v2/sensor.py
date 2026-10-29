@@ -66,6 +66,8 @@ class PulseSensor(PulseEntity, SensorEntity):
                     "valve_pair_verified_at",
                     "valve_pair_readback",
                     "valve_pair_corrections",
+                    "valve_pair_read_misses",
+                    "valve_pair_read_timeouts",
                     "recovery_reason",
                     "recovery_resume_at",
                     "max_open_seconds",

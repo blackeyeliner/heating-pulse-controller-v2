@@ -92,10 +92,18 @@ def decode_pair(response, network_address, endpoint):
         raise HomeAssistantError("Invalid fresh valve-limit read response") from err
 
 
+class ReadbackTimeout(HomeAssistantError):
+    """A diagnostic response did not arrive; not proof of incorrect limits."""
+
+
 class PairReader:
     def __init__(self, hass, config):
         self.hass, self.config = hass, config
         self.timeout = 12
+        self._response_unsubscribe = None
+        self._response_base = None
+        self._pending = {}
+        self._stopped = False
 
     def _binding(self):
         registry = er.async_get(self.hass)
@@ -155,29 +163,52 @@ class PairReader:
         finally:
             unsubscribe()
 
-    async def _read(self, base, ieee, address, endpoint):
+    async def _ensure_response(self, base):
+        """Keep the response listener alive between reads, including idle periods."""
         from homeassistant.components import mqtt
 
-        transaction = uuid.uuid4().hex
-        received = asyncio.Event()
-        reply = None
+        if self._stopped:
+            raise HomeAssistantError("Valve readback has stopped")
+        if self._response_unsubscribe is not None:
+            if self._response_base != base:
+                raise HomeAssistantError("Valve readback bridge changed during operation")
+            return
 
         @callback
         def receive(message):
-            nonlocal reply
             if message.retain:
                 return
             try:
                 data = json.loads(message.payload)
-                if data.get("transaction") == transaction:
-                    reply = data
-                    received.set()
+                transaction = data.get("transaction")
+                future = self._pending.get(transaction)
+                if future is not None and not future.done():
+                    future.set_result(data)
             except ValueError, AttributeError, TypeError:
                 pass
 
-        unsubscribe = await mqtt.async_subscribe(
+        self._response_unsubscribe = await mqtt.async_subscribe(
             self.hass, base + "/bridge/response/action", receive
         )
+        self._response_base = base
+
+    async def stop(self):
+        self._stopped = True
+        if self._response_unsubscribe is not None:
+            self._response_unsubscribe()
+            self._response_unsubscribe = None
+        for future in self._pending.values():
+            if not future.done():
+                future.cancel()
+        self._pending.clear()
+
+    async def _read(self, base, ieee, address, endpoint):
+        from homeassistant.components import mqtt
+
+        await self._ensure_response(base)
+        transaction = uuid.uuid4().hex
+        future = asyncio.get_running_loop().create_future()
+        self._pending[transaction] = future
         try:
             request = {
                 "transaction": transaction,
@@ -200,10 +231,14 @@ class PairReader:
                 self.hass, base + "/bridge/request/action", json.dumps(request), qos=0, retain=False
             )
             async with asyncio.timeout(self.timeout):
-                await received.wait()
+                reply = await future
             return decode_pair(reply, address, endpoint)
+        except TimeoutError as err:
+            raise ReadbackTimeout(
+                f"Valve read response timed out; transaction={transaction}"
+            ) from err
         finally:
-            unsubscribe()
+            self._pending.pop(transaction, None)
 
     async def read(self):
         """MQTT binding requires correlated ZCL proof; no cached-state fallback."""
@@ -219,7 +254,15 @@ class PairReader:
                     raise ValueError("Invalid valve limits")
                 return result
             base, ieee = binding
+            # HA queues broker subscriptions instead of awaiting SUBACK. Register
+            # the response topic FIRST. The subsequent retained bridge/devices
+            # delivery crosses the same client's broker subscription queue before
+            # the fast request/reply exchange. Never tear down the response topic
+            # between reads, which would recreate the race every minute.
+            await self._ensure_response(base)
             address, endpoint = await self._device(base, ieee)
             return await self._read(base, ieee, address, endpoint)
-        except (TimeoutError, AttributeError, KeyError, TypeError, ValueError) as err:
+        except TimeoutError as err:
+            raise ReadbackTimeout("Fresh valve-limit response timed out") from err
+        except (AttributeError, KeyError, TypeError, ValueError) as err:
             raise HomeAssistantError("Fresh valve-limit readback unavailable") from err

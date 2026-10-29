@@ -18,7 +18,7 @@ from .const import (
     CONF_OUTPUT,
     CONF_TRV,
 )
-from .valve_readback import PairReader
+from .valve_readback import PairReader, ReadbackTimeout
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,6 +41,8 @@ class SonoffActuator:
         self._next_pair_check = 0
         self._checked_feedback = None
         self.pair_corrections = 0
+        self.pair_read_misses = 0
+        self.pair_read_timeouts = 0
 
     async def _call(self, domain: str, service: str, data: dict):
         if self.physical_controls is not None and data.get("entity_id") == self.config[CONF_TRV]:
@@ -114,8 +116,9 @@ class SonoffActuator:
         except AttributeError, TypeError, ValueError:
             return None
 
-    async def verify_pair(self, opening, closing):
-        self.pair_verified_at = None
+    async def verify_pair(self, opening, closing, *, preserve_proof=False):
+        if not preserve_proof:
+            self.pair_verified_at = None
         actual = await self.reader.read()
         self.last_pair = actual
         self._checked_feedback = self._feedback()
@@ -126,6 +129,7 @@ class SonoffActuator:
                 f"Valve readback {actual} differs from requested {(opening, closing)}"
             )
         self.pair_verified_at = self.now()
+        self.pair_read_misses = 0
 
     async def monitor(self, target, permitted, on_drift):
         """Reconcile changed feedback and poll owned open pulses once a minute."""
@@ -140,8 +144,30 @@ class SonoffActuator:
             return False
         try:
             try:
-                await self.verify_pair(*expected)
+                await self.verify_pair(*expected, preserve_proof=True)
                 return False  # A stale cached report alone must not trigger a rewrite.
+            except ReadbackTimeout as err:
+                self.pair_read_timeouts += 1
+                self.pair_read_misses += 1
+                # An isolated missing diagnostic reply cannot contradict the
+                # freshly verified opening. Keep the original pulse/deadline and
+                # retry soon; never relax a conflicting cache or actual mismatch.
+                if (
+                    was_open
+                    and self.reported_pair() == expected
+                    and self.last_pair == expected
+                    and self.pair_verified_at is not None
+                    and 0 <= self.now() - self.pair_verified_at <= 180
+                    and self.pair_read_misses < 3
+                ):
+                    self._next_pair_check = self.now() + 5
+                    _LOGGER.warning(
+                        "Valve diagnostic reply missed (%s/3): %s; retrying without interrupting pulse",
+                        self.pair_read_misses,
+                        err,
+                    )
+                    return False
+                raise
             except PairMismatch:
                 self.commanded_open = None
                 self.pair_corrections += 1
