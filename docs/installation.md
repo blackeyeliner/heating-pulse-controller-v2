@@ -19,6 +19,14 @@ The current adapter uses the [Sonoff TRVZB interface](https://www.zigbee2mqtt.io
 
 The setup defaults of 21 / 83 are configurable opening and closing limit values. Check the correct pair for your valve; these numbers do not specify measured flow or stem travel.
 
+## Sensor hardware used
+
+Room measurements use [Xiaomi LYWSD03MMC monitors with pvvx/ZigbeeTLc firmware](https://www.zigbee2mqtt.io/devices/LYWSD03MMC-z.html), identified by Zigbee2MQTT as `LYWSD03MMC-z`. This setup uses replacement Zigbee firmware rather than the original Bluetooth firmware.
+
+Radiator measurements use [SONOFF SNZB-02LD sensors](https://www.zigbee2mqtt.io/devices/SNZB-02LD.html) with external temperature probes attached to the radiator surface. The probe measures the surface response; it is not an immersed inlet-water sensor.
+
+These are the devices used during development, not a restriction on the temperature inputs. Other sensors must provide Celsius measurements with the freshness and repeated-value reporting described below. Place the room sensor away from radiator heat, direct window draughts and cold floor-level air.
+
 ## Check temperature reporting
 
 The controller needs to distinguish a stable temperature from a sensor that stopped sending data. This matters particularly during plateau detection.

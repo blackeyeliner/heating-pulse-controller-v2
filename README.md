@@ -7,15 +7,13 @@ A custom Home Assistant integration for water-filled radiators, with adaptive pu
 
 [Installation](docs/installation.md) · [Algorithm](docs/architecture.md) · [Design notes](docs/design-notes.md) · [Testing and observations](docs/validation.md)
 
-## Why this was built
-
 The controller is designed for heating systems with a high-pressure hot-water supply, varying water temperature and radiators with substantially different thermal behaviour. The objective is to maintain room temperature while avoiding unnecessary water circulation.
 
 The operating assumption is that the smallest reliable valve opening already admits enough hot water to heat a radiator. Opening wider can increase flow faster than the radiator can transfer that additional heat into the room, sending hotter water into the return pipe. The design therefore keeps the valve at its **minimum reliable opening** during heating and adjusts when heating starts and stops. Moving below that opening introduces motor-positioning errors and can leave the valve leaking after an apparent closure.
 
 Several other conditions make a fixed heating schedule or temperature cutoff inadequate:
 
-- **Temperature at the valve differs from temperature in the room.** The built-in sensor sits beside the radiator and pipework. Its bias changes as they warm and cool, limiting the usefulness of a fixed offset.
+- **Temperature at the valve differs from temperature in the room.** The built-in sensor may sit beside hot pipework, beneath a draughty window or close to a cold floor. Its reading can differ substantially from the occupied part of the room, and that difference changes during heating and ventilation, so a fixed offset cannot reliably correct it.
 - **Heat delivery continues after closure.** The surface can keep warming before reaching its peak, and the radiator continues releasing heat as it cools. A large radiator may need a much longer interval between pulses than a small one.
 - **Supply temperature changes through the day.** Yesterday's cutoff can end a pulse prematurely or become impossible to reach. Radiator temperature history is needed to recognise those changes.
 - **Room demand changes too.** The same radiator may need to restart sooner when the room is well below target and making little progress. Open doors, ventilation and other heaters complicate that decision.
@@ -83,6 +81,14 @@ The Python integration provides the native room thermostat, configuration flow, 
 ## Installation
 
 The current adapter supports **Sonoff TRVZB through Zigbee2MQTT**. It requires the valve's opening and closing limit entities, an external room-temperature sensor and a radiator-surface sensor. Both sensors must deliver fresh Celsius readings even when the value is unchanged.
+
+Hardware used with this controller:
+
+- **Room temperature:** [Xiaomi LYWSD03MMC](https://www.zigbee2mqtt.io/devices/LYWSD03MMC-z.html) temperature and humidity monitors running **pvvx/ZigbeeTLc replacement firmware**, exposed in Zigbee2MQTT as `LYWSD03MMC-z`.
+
+- **Radiator surface temperature:** [SONOFF SNZB-02LD](https://www.zigbee2mqtt.io/devices/SNZB-02LD.html) temperature sensors with external probes attached to the radiator surface.
+
+Other temperature sensors can be used if they meet the [reporting requirements](docs/installation.md#check-temperature-reporting). The controller needs fresh readings, including repeated equal values, to distinguish a temperature plateau from a sensor that has stopped reporting.
 
 Install through HACS as a **custom repository**, then configure and observe one radiator before adding the other rooms. [Setup instructions →](docs/installation.md)
 
