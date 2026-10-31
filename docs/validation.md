@@ -1,83 +1,62 @@
-## Beta13 reconnection grace
+# Testing and observations
 
-Added29 cases covering ten spaced retries, tenth-attempt success/failure, same-session automatic recovery, manual off, real Store reload, no catch-up burst, ownership, corrupted/broken persistence, bounded hung transport and fresh MQTT/metadata checks. The focused66-case runtime/emergency/recovery/reconnect group completed with exit0 before the final timeout guard; the final29-case reconnect group also completed with exit0 (15.24 seconds). The combined205-case run before that final guard reported all assertions passed but still exited139 during local Python interpreter finalisation. That combined process is unsuccessful. These were the local preparation results. The full207-case Linux CI run must complete cleanly before installation; the completed release/installation result is recorded in the vault deployment entry.
+[← README](../README.md) · [Design notes](design-notes.md)
 
-## Beta 12 validation
+Validation covers the thermal algorithm, Home Assistant integration, device communication and behaviour on real hardware. Each level checks a different part of the system: a simulated service response can test command handling, but cannot establish whether a valve moved or a radiator received hot water.
 
-227 software tests cover the existing controller and optional emergency notification/backup path. Focused tests exercise real HA state events, changed-limit feedback timeout, explicit-disable closure failure, partial backup failure/retry, mobile retry, real persistent incident reload and manual recovery without stopping ACs. Fake actuator services are registered after real platform setup where required so readback is actually exercised. Local Python 3.14 combined-suite interpreter-finalization instability remains separate from test outcomes; require a clean Linux CI exit before installation. Production delivery and installed revision are recorded in the vault deployment entry.
+## Automated tests
 
-Changed limit readback on the pilot uses the installed Zigbee2MQTT converter's awaited Zigbee write response. This does not provide continuous heartbeat monitoring or physical stem/heat/flow confirmation. A cached unchanged limit cannot detect a silent failure by itself. No real fault or reserve activation is injected on production.
+Linux CI runs lint and formatting checks, the Python and frontend suites, and the installation-package build. The development dependencies pin the Home Assistant test environment; current results and coverage are available in [GitHub Actions](https://github.com/blackeyeliner/heating-pulse-controller-v2/actions/workflows/check.yml).
 
-# Validation
+| Area | Examples covered |
+|---|---|
+| Heating algorithm | Demand hysteresis, reference expiry, plateau detection, cutoff calculation, residual warming and adaptive cooling thresholds. |
+| Sensor input | Irregular timestamps, fresh equal readings, stale data, gaps and falling curves. |
+| Home Assistant | Real state events, config entries, platforms, Store persistence, reload and unload. |
+| Valve communication | Ordered commands, correlated reads, late/unrelated replies, drift correction and retry deadlines. |
+| Recovery | Reconnection attempts, manual Off, persisted incidents and partial notification/backup failure. |
+| Interface and package | Native climate, physical MQTT controls, card behaviour and installation ZIP contents. |
 
-## Current result: beta 11, 2026-10-18
+Hardware service delivery is simulated in the Python tests. The frontend suite uses a Node test harness. Tests against the pinned HA version do not establish compatibility with every later release or device firmware.
 
-Version `0.1.0b11`: **164 test cases** against HA 2026.9.3 / Python 3.14. The local combined run then exited with SIGSEGV during Python interpreter-finalization garbage collection (Homebrew Python 3.14.7), after pytest reported all cases passed. Focused engine/runtime/window and new recovery suites exited successfully. The full local process has the same interpreter-finalization crash recorded on beta 10. Treat the combined local process result as failed; require a clean Linux CI run before deployment. The faulthandler trace points to managed-dictionary deallocation during finalization, not to a failing controller assertion. Cause remains unproven. Lint, format and deterministic packaging passed locally. Beta 7 also passed both published GitHub CI runs and production `ha core check`; beta 8 deployment results are recorded separately. Five dependency deprecation warnings remain. The historical coverage percentages below are beta 1 measurements, not a current coverage report.
+[Test suite](../tests) · [Development setup](../CONTRIBUTING.md)
 
-Beta 11 adds bounded non-latching recovery after calibration/data failures. The 20-minute timeout closes into at least 80 minutes off before calibration retry; missing data repeat timed maintenance heat. Window policy is corrected to 15 minutes on / at least 45 minutes off (25%). Fifteen recovery cases cover calibration completion after 15 minutes, repeated outages, pause/retry persistence, data return, explicit off, cached thermostat requests, actual HA actuator deadlines and critical valve failure. Only actuator control failures latch a fault; selected legacy writers inhibit via ownership handover.
+## Hardware checks
 
-Beta 9 supersedes the beta 8 initial-pause behaviour. Window transitions preserve live valve openings and their original timestamp, switch between ten-minute timed and ordinary termination, and impose forty minutes closed only after timed closure. Tests verify both in-place transitions, first-pulse normal readiness, demand hysteresis, late exposure, fresh-only plateau learning and actual HA actuator call continuity. The dated vault record contains the completed beta 9 validation and activation result.
+Checks on installed hardware have exercised:
 
-Beta 10 adds independent threshold persistence without a confirmed peak, including startup/manual sources and long downtime. Twelve beta 10 cases cover compatibility/corruption, unknown feedback, no actuator commands during restore, the actual set_restart_temperature action and two successive real HA storage reloads. This parameter does not expire at the radiator timeout; live reports must still be fresh and closed valve limits must be confirmed. Full beta 7 episode reconstruction keeps its stricter validation.
+- Calibration, ordinary cutoff closure, residual warming and cooling.
+- Lower-reference replacement and scheduled recalibration.
+- Physical target and mode changes reflected in the native thermostat.
+- Firmware frost handover and Antifreeze display while the thermostat remains Off.
+- Automatic recovery after a compatible restart, with saved requests and settings retained.
+- Correlated valve-limit reads through the live MQTT/Zigbee2MQTT path.
 
-The suite now also covers adaptive cooling, numeric Reference age, window PWM and cold-closure handling, opening interlocks, and confirmed cooling checkpoint persistence. A real HA config-entry reload using its actual Store restores a 29 °C gate and permits fresh room demand at radiator 28 °C after explicit enable. Invalid/old/warming observations, changed settings or bindings, unknown feedback, open windows and failed final closure reject or defer restoration as appropriate. Hardware services remain simulated in these tests.
+Installation checks compare deployed files with the release and run the HA configuration check before observing startup. A software state is compared with the radiator's physical response wherever possible.
 
-Production beta 7 was installed through HACS and enabled after fresh reports at 09:55:20 Europe/Prague. Only Anton's Office is migrated. Confirmed hardware observations across the pilot include baseline calibration, ordinary threshold closure, residual peak, adaptive cycles, lower-plateau replacement, scheduled recalibration and interruption of an ordinary pulse by actual window feedback (09:50:51 on beta 6). Numeric Reference age advances live without new timer Recorder rows or selected-device/entity Activity events.
+## Regression testing
 
-Still pending: a complete physical window PWM cycle, emergency closure at the configured cold thresholds, the first actual production cooling-checkpoint restore, and outage/physical closure assessment. Automated HA reload coverage is not evidence that production has already restored a checkpoint. The first beta 7 upgrade had none to restore because beta 6 did not save one and the preceding pulse was window-interrupted. No production sensor values were fabricated for testing.
+Recorded failures are used to construct focused tests. For example, a fast device response exposed a race in which a temporary MQTT listener was not ready before the request was sent. The regression test delays subscription setup and delivers an immediate response. The persistent-listener implementation must handle it without interrupting the pulse.
 
-Overnight 00:00–08:11 on October 17, target 23.5 °C: room 23.19–23.53 °C (mean 23.358 °C), seven pulses and approximately 70 minutes commanded open (14.3%). This does not establish sustained 24 °C control, measured flow, heat consumption or monetary savings.
+Other tests cover unusable calibration candidates, missing reports, configuration drift and replies that arrive after a request has timed out. These tests establish how the controller handles a known condition; they do not reproduce every possible hydraulic or radio environment.
 
-The authoritative dated deployment record and operating handoff are in the vault's `projects/home-assistant/subprojects/heating-pulse-controller-v2.md`. The sections below are historical results at their stated release dates; their then-pending steps do not override the current result above.
+## Remaining limitations
 
-## Historical beta 2 baseline
+- **Some curves still reach the calibration timeout.** Nearly flat or falling traces can fail to establish a usable reference before the deadline. The controller enters bounded recovery; detector behaviour remains under investigation.
+- **Correct limits do not prove heat delivery.** A radiator can remain cold or begin cooling while its valve settings are confirmed open. Readback cannot identify a mechanical obstruction or a change in hot-water supply.
+- **Surface temperature is an indirect measurement.** Sensor position and airflow affect the curve. The learned reference is not a direct inlet-water temperature or stored-energy measurement.
+- **Consumption is not measured by this integration.** Valve-open time alone cannot establish litres consumed, heat output or financial savings.
+- **Rooms interact.** Doors, wind, ventilation and other heaters change the load. The controller does not yet model heat transfer between rooms.
+- **Protection depends on available infrastructure.** HA must be running to enforce software deadlines or request backup equipment. Device-local protection has its own hardware and temperature-source dependencies.
 
-Date: 2026-10-16. Development environment: Python 3.14.7, Home Assistant 2026.9.3, matching the pilot's installed HA Core version. Tests use a temporary HA config directory and fake actuator services; none issue production commands.
+## Replaying recorded history
 
-**Local result:** 52 tests passed; lint and formatting checks passed. The beta 1 coverage baseline was 88% overall and 91% for the core. Five deprecation warnings originate in HA/aiohttp/backoff dependencies. The ZIP build and contents checks passed. GitHub CI results are recorded in the repository Actions tab; live hardware commissioning has not run.
+```sh
+uv run python tools/replay_history.py history.json \
+  --radiator sensor.example_radiator_temperature \
+  --valve sensor.example_valve_position
+```
 
-## Automated coverage
+Use the entity IDs from the recording. The input is HA's history response array, or an object containing it under `data`. Include explicit time bounds and timezone when exporting a trace.
 
-- Pure state transitions: cold startup, ordinary threshold closure, lower-plateau replacement and age reset, three-hour expiry at cycle start, demand cancellation, cooling gates and off/on continuity.
-- Curve handling: timestamp-based regression, reports every minute, absent/invalid reports, interrupted curves, declining traces, unusable lag compensation and bounds.
-- Persistence: valid calibration restores without open state; malformed/incompatible data is discarded.
-- Real HA event dispatch: unchanged reports and identical forced state updates count, attribute-only writes do not, setup waits for fresh readings.
-- Actuator sequencing and ownership: legacy guards, command failure, disable during initial reconciliation or an open command, closure on unload, and no stale callbacks after unload.
-- Actual HA config entry/platform setup: UI config flow, duplicate actuator rejection, all twelve entities, options reload, integration reload and unload.
-- Packaging: deterministic installation ZIP containing only integration files; English translation and manifest metadata checks.
-
-These are adapter tests against installed HA code, not just mocked HA imports. Hardware service delivery is simulated, so RF reliability, firmware interpretation and physical closure still need the office pilot.
-
-## Recorded office history
-
-The read-only replay covered 2026-10-13 10:27 UTC through 2026-10-16 10:27 UTC: 1,628 radiator history entries and ten logical open intervals. Original history and detailed replay output remain under local-only storage, outside the installation package.
-
-The detector accepted **no complete calibration** in these recorded intervals. This is a limitation, not evidence of successful live plateau identification:
-
-- Two cold-start pulses lasted about 579 and 612 seconds. Surface temperature was still approaching its peak when the old controller closed; the records contain insufficient sustained open-valve plateau evidence under the provisional settings.
-- Other intervals include a hot restart with insufficient fresh warming, sustained falling temperature, and gaps in recorded state changes. Several old cycles have only milliseconds between logical close and reopen; logical position alone does not prove a hydraulic interruption.
-- The last 111-second pulse contained only one changed radiator sample while logically open. Its observed surface peak was about 119 seconds after closure, consistent with using two minutes as an initial *proposal*, but insufficient to establish a reliable universal lag.
-- The near-saturated long pulses show post-close maxima about 32–35 seconds later; this illustrates why lag is learned from ordinary short pulses rather than diagnostic plateaus. Sampling and late closure also affect that observation.
-
-Recorder state changes do not include every fresh unchanged sensor report. Replay does not insert synthetic equal readings, use post-close flattening as an open-valve plateau, or extrapolate the thermal trajectory after a different closing command. Synthetic curves exercise successful calibration; successful real calibration remains to be demonstrated.
-
-## Commissioning still required
-
-1. Install the published HACS custom repository/release only for the office pilot.
-2. Verify that the actual sensor feed distinguishes fresh equal measurements from cached updates, and measure reporting cadence while flat.
-3. Select initial tuning explicitly. The README defaults are a proposed starting set, not approved production parameters.
-4. Verify Sonoff command behaviour and the operating procedure after HA/Zigbee outages.
-5. Enable the controller while observing one complete calibration, ordinary pulse and cooling cycle. Inspect the estimated knee, lag and closing threshold against the live curve.
-6. Check comfort and available consumption measurements over subsequent cycles. No water-saving percentage is claimed.
-
-From beta14, enabled intent resumes automatically after compatible restart/reload and startup checks. Explicit off stays off. Real Store/config-entry tests cover native mode/target persistence, restart resume, missing-temperature fallback and manual off during an in-flight startup closure. No interrupted pulse is restored. Four Node tests cover bundled card colors, standard control forwarding and configuration races. Actual production restart and frontend checks are recorded in the vault deployment entry.
-
-## Live reporting check and beta 2 fix
-
-On 2026-10-16, both selected office sensors had temperature reporting configured for 10 s minimum / 60 s maximum. Zigbee2MQTT logs showed repeated equal temperatures at approximately one-minute intervals. HA did not advance the corresponding state timestamps for these identical MQTT sensor values. Inspection of the installed HA 2026.9.3 MQTT code confirmed that unchanged values are discarded unless `force_update` is enabled.
-
-Beta 2 accepts the identical forced `state_changed` events generated with that setting; beta 1 only accepted ordinary value changes and `state_reported` events. A regression test exercises the real HA state machine with `force_update=True`. Attribute-only events remain excluded. This fixes the transport prerequisite for plateau detection; it does not replace live heating-cycle validation.
-
-## Beta 4
-
-Adaptive cooling adds bounded room-trend/deficit-based selection of the frozen cooling threshold, disabled by default. Reference age changes to MM:SS text with a numeric seconds attribute. The expanded 66-test suite covers these changes and legacy calibration compatibility. Real hardware observations on beta 3 verified calibration and one ordinary pulse through post-close peak confirmation; beta 4 adaptation has not yet run on hardware. No consumption-saving claim follows from this baseline. See [beta 4 design](next-stage.md).
+Replay feeds the detector the measurements from the original open intervals. Recorder may omit equal readings received by the live controller. The tool does not insert missing samples or calculate the temperature trajectory that different valve commands would have produced.

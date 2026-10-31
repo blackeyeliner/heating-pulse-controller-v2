@@ -1,0 +1,23 @@
+name: Suggest a change
+description: Suggest a feature or a change to existing behaviour.
+title: "[Idea]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem should this solve?
+      description: Describe the situation and its impact before proposing a solution.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What would a good result look like?
+      description: Include how we could observe or measure success.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Setup, constraints and alternatives
+      description: Relevant hardware, available sensors, workarounds and trade-offs.

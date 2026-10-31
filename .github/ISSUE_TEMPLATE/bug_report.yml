@@ -1,0 +1,31 @@
+name: Unexpected behaviour
+description: Report a control, installation or display problem.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: "Please share only relevant, redacted data. Never attach tokens, full HA backups or .storage files."
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Integration, Home Assistant, Zigbee2MQTT and TRV firmware versions.
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: Expected and observed behaviour
+      description: What happened, what did you expect, and when? Include timezone and whether the issue repeats.
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Relevant setup and conditions
+      description: Sensors/reporting cadence, valve operating pair, changed options, window feedback, other heating and recent restarts.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Relevant redacted logs, temperature trace, phase/decision timeline and valve readback. Include a complete heating/cooling cycle if possible.

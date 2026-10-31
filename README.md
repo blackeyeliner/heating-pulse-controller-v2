@@ -1,194 +1,85 @@
-# Heating Pulse Controller v2
+# Heating Pulse Controller
 
-Adaptive radiator pulse control as a Home Assistant custom Python integration. It uses a room sensor, a radiator-surface sensor, and a fixed, mechanically reliable Sonoff TRV opening. Each room can expose its own native climate entity, persisted heat/off request and target; an existing thermostat remains supported during migration.
+A custom Home Assistant integration for water-filled radiators, with adaptive pulse control, physical thermostat input and device-level frost protection. It learns from each radiator's heating and cooling curves to adjust pulse termination and the interval before reheating.
 
-**Status:** `0.1.0b26`, tested against Home Assistant **2026.9.3 / Python 3.14**. Beta 4 adaptive calibration and ordinary cycles have been observed in the office pilot. Beta 5 corrects Reference age Activity spam. Beta 6 adds optional window-aware PWM and emergency window closure. Beta 7 preserves validated cooling episodes across clean restarts. Beta 9 switches window termination in place; beta 10 also persists the last selected cooling threshold independently of a confirmed peak. Beta 11 adds non-latching timed recovery: closed-window failure PWM uses up to 20 minutes on / at least 80 minutes off; open-window PWM uses up to 15 minutes on / at least 45 minutes off (25%) without an initial forced pause. Available as a HACS custom repository, with a separate ZIP for manual installation. Long-term comfort and consumption assessment remain ongoing.
+[![Validate integration](https://github.com/blackeyeliner/heating-pulse-controller-v2/actions/workflows/check.yml/badge.svg)](https://github.com/blackeyeliner/heating-pulse-controller-v2/actions/workflows/check.yml)
+[![Release](https://img.shields.io/github/v/release/blackeyeliner/heating-pulse-controller-v2?include_prereleases&label=beta)](https://github.com/blackeyeliner/heating-pulse-controller-v2/releases)
 
+[Installation](docs/installation.md) · [Algorithm](docs/architecture.md) · [Design notes](docs/design-notes.md) · [Testing and observations](docs/validation.md)
 
-Beta 25 verifies both Sonoff valve limits through a transaction-correlated Zigbee2MQTT raw read after commands and during owned open pulses. Confirmed drift is corrected within the original pulse deadline; failed confirmation uses the existing reconnection grace. Invalid plateau candidates preserve the previous valid calibration and request another measurement. See [release notes](docs/releases/0.1.0b25.md). Production room limits remain Office 20 minutes and other rooms 15 minutes.
+## Why this was built
 
-Beta26 fixes fast-response subscription races and keeps isolated missed periodic reads from interrupting a verified pulse. The listener persists until unload; bounded retries retain the original maximum duration and actual drift protection. All4 production room limits are now15 minutes. See [release notes](docs/releases/0.1.0b26.md).
+The controller is designed for heating systems with a high-pressure hot-water supply, varying water temperature and radiators with substantially different thermal behaviour. The objective is to maintain room temperature while avoiding unnecessary water circulation.
 
-## Off mode and frost protection
+The operating assumption is that the smallest reliable valve opening already admits enough hot water to heat a radiator. Opening wider can increase flow faster than the radiator can transfer that additional heat into the room, sending hotter water into the return pipe. The design therefore keeps the valve at its **minimum reliable opening** during heating and adjusts when heating starts and stops. Moving below that opening introduces motor-positioning errors and can leave the valve leaking after an apparent closure.
 
-The native thermostat displays the TRV frost threshold while Off, and the remembered room heating target while Heat. The `heating_target_temperature` attribute preserves the room target independently. Adjusting temperature while Off edits the frost threshold; it does not start heating or overwrite the remembered Heat target. Missing frost data is shown as unknown, never an invented 10 °C. The frost number is discovered from the selected TRV device in HA's entity registry and must be enabled; advanced entries may explicitly bind `frost_protection_entity`.
+Several other conditions make a fixed heating schedule or temperature cutoff inadequate:
 
-An explicit native Off safely closes first, confirms physical TRV Off, then permits the calibrated minimum opening with full closed limit (opening configured value / closing 100). Firmware can therefore open on its own frost demand. A zero opening limit would block that protection. Once handed off, periodic ticks and unload do not force it shut again. Protection intent survives restart; fresh installs remain passive. Reconnection/critical incidents and legacy ownership guards retain priority. Control enabled with an Off thermostat still uses firmware protection, without ordinary pulse/PWM heating. Heat reacquires closed limits before normal pulse control.
+- **Temperature at the valve differs from temperature in the room.** The built-in sensor sits beside the radiator and pipework. Its bias changes as they warm and cool, limiting the usefulness of a fixed offset.
+- **Heat delivery continues after closure.** The surface can keep warming before reaching its peak, and the radiator continues releasing heat as it cools. A large radiator may need a much longer interval between pulses than a small one.
+- **Supply temperature changes through the day.** Yesterday's cutoff can end a pulse prematurely or become impossible to reach. Radiator temperature history is needed to recognise those changes.
+- **Room demand changes too.** The same radiator may need to restart sooner when the room is well below target and making little progress. Open doors, ventilation and other heaters complicate that decision.
 
-This is device-local protection, not a guaranteed room temperature, and depends on the TRV's temperature source and functioning hardware. [TRVZB mode, frost and opening-limit semantics](https://www.zigbee2mqtt.io/devices/TRVZB.html).
+[![System diagram showing room and radiator sensors, controller commands and valve readback, with physical controls and protection modes.](docs/assets/heating-system.svg)](docs/assets/heating-system.svg)
 
-## Control behaviour
+## Adaptive heating control
 
-1. Open only at the configured minimum operating point when the room needs heat and the radiator has cooled sufficiently.
-2. With no reference, or a reference at least three hours old, observe a calibration pulse until a sustained plateau is confirmed. Room satisfaction, off commands, missing data and the maximum open duration can stop it earlier.
-3. In ordinary pulses, close at the learned, lag-compensated temperature. Continue checking for a lower plateau during every pulse; accepting one replaces the reference and its timestamp.
-4. After closure, observe residual warming and then cooling. The next pulse needs both room demand and a radiator below `room + cooling_fraction × (peak − room)`. Freeze this cooling threshold for that episode.
+Each room has a controller that combines temperature histories, the room target, its previous calibration and the state of the valve. Decisions are made by a state machine; the sensors supply measurements rather than directly switching heating.
 
-The plateau reference describes radiator surface temperature, not measured inlet-water temperature. No hotter-supply inference is made from the initial slope. Fan operation is independent. Longer pulses are not used to compensate for a cold room. Surface temperature alone cannot establish water consumption or heat delivered per litre.
+**Calibration establishes a usable reference for current conditions.** During a needed heating pulse, the algorithm looks for sustained flattening after a meaningful temperature rise. It checks sample freshness, gaps and slope before accepting a plateau. The reference expires after three hours, while ordinary pulses continue checking for a lower plateau so cooler supply water can be recognised earlier.
 
-The core is in [engine.py](custom_components/heating_pulse_controller_v2/engine.py), with no Home Assistant imports or third-party numerical dependencies. The HA runtime handles subscriptions, commands, storage and lifecycle. [Validation notes](docs/validation.md) describe what has and has not been demonstrated.
+**Pulse termination accounts for residual warming.** Suitable completed pulses provide an estimate of how long the surface continues warming after closure. That delay and the calibration trace determine an earlier cutoff for subsequent pulses. A pulse can also end when the room is satisfied, a plateau is confirmed, an opening limit is reached or another control condition requires closure. A single radiator-temperature reading does not decide the outcome.
 
-## Installation through HACS
+**The interval between pulses adapts to the room's progress.** After peak confirmation, the controller selects a cooling threshold relative to the room temperature. In adaptive mode, a larger shortfall with little recent warming raises that threshold, allowing another pulse sooner. If the room is already warming toward its target, the algorithm allows more cooling. The adjustment is bounded, requires sufficient history and stays fixed for that cooling episode. Reopening still requires room demand; it is not scheduled for a fixed number of minutes later. Adaptive cooling is configurable and defaults to off for new entries.
 
-Custom repository: [blackeyeliner/heating-pulse-controller-v2](https://github.com/blackeyeliner/heating-pulse-controller-v2).
+[![Illustrative radiator heating cycle showing valve closure before the surface peak, cooling, and an earlier restart when room demand is greater.](docs/assets/heating-cycle.svg)](docs/assets/heating-cycle.svg)
 
-[Releases and installation downloads](https://github.com/blackeyeliner/heating-pulse-controller-v2/releases). This integration is distributed through a custom repository, not the HACS default catalogue.
+*Illustrative curves, not measured data. The lower panels show alternative room conditions. One restart threshold applies throughout each cooling episode; reaching it starts another pulse only if the room still needs heat.*
 
-1. Add its GitHub URL to HACS **Custom repositories**, category **Integration**.
-2. Download **Heating Pulse Controller v2**, then restart Home Assistant. If using the initial beta release, enable prerelease versions in HACS.
-3. In **Settings → Devices & services → Add integration**, select **Heating Pulse Controller v2**.
-4. Leave the optional existing thermostat empty for a native room thermostat. Select the physical TRV, both temperature sensors, and Sonoff opening/closing-limit number entities. Select every legacy automation that can write to the valve or synchronise the thermostats.
-5. Review tuning and sensor-reporting semantics before turning on the new **Control enabled** switch.
+[Algorithm, thresholds and state transitions →](docs/architecture.md)
 
-Versions before `0.1.0b3` incorrectly classify the controller as a helper: existing entries appear under **Settings → Devices & services → Helpers**. Version `0.1.0b3` uses the service integration type and appears under **Integrations** after an update and HA restart. Existing room configuration and entity IDs are retained; do not delete/recreate the entry.
+### Recorded operation
 
-HACS reads `custom_components/heating_pulse_controller_v2/` directly from the repository. The separately built ZIP is for manual installation/recovery: extract its `custom_components/heating_pulse_controller_v2` directory into HA's `/config/custom_components/`, then restart HA.
+The same sequence is shown below as valve commands, radiator-surface temperature and room temperature. Brief openings are followed by much longer cooling tails. Radiator peaks vary across the period, while the room temperature moves within a much narrower range.
 
-Initial installation starts disabled. Once enabled, control intent survives integration reloads, HA restarts and updates with unchanged device bindings. Startup verifies valve availability/closed limits, ownership, verified reporting and a valid setpoint. It waits for fresh temperatures/window state, then uses existing bounded maintenance PWM if non-actuator inputs remain missing past the startup reporting window. An interrupted pulse is discarded. Explicit off remains off; a confirmed critical valve incident still requires reset and re-enable. A saved enable intent is not restored across incompatible device binding changes.
+[![Recorded heating cycles: short valve commands above radiator heating and cooling curves, with the corresponding room-temperature response below.](docs/assets/recorded-heating-cycles.png)](docs/assets/recorded-heating-cycles.png)
 
-## Native thermostat and bundled card
+*Actual Home Assistant history from the same time window, aligned horizontally. The temperature panels use different vertical scales. The valve chart's 0/5 signal represents closed/open commands at the configured operating point; it is not a measured opening percentage or water flow.*
 
-New entries without an external thermostat provide a native `climate` entity, persisted target/mode and a logical Valve position sensor (5=open command, 0=closed command, unknown=unconfirmed). Standard climate services work directly. No template thermostat, dummy switch or numeric helper is required. `hvac_action` is heating only while opening is confirmed, idle while enabled and waiting, off when disabled, and unknown during uncertain valve/startup states.
+## Controls, protection and recovery
 
-The integration bundles `custom:heating-pulse-thermostat-card`, wrapping HA's standard thermostat card and preserving its controls/features. The dial is orange during heating, blue while idle and grey while off/uncertain. No separate HACS frontend package is needed. Use the same config as a thermostat card with the custom type; refresh the browser after installation.
+The Python integration provides the native room thermostat, configuration flow, diagnostic entities, persistent state and a bundled thermostat card. It replaces the earlier collection of templates, helpers and valve-writing automations.
 
-Existing entries keep legacy input mode until explicitly adopted. Disable control, call `heating_pulse_controller_v2.adopt_thermostat` with `config_entry_id`, then hand over the old climate entity ID using the entity registry and archive/remove the old YAML thermostat before restart. The action captures its current target/mode. Optional `preserve_history_helper: true` retains only the old logical valve helper mirror for continuous existing graphs; it is not a control dependency. Keep original YAML for rollback. Native state and control-intent storage are separate from calibration storage.
+| Behaviour | Implementation |
+|---|---|
+| **Physical controls remain usable** | Turning the TRV dial updates the room target and can enable Heat from Off. Supported firmware mode changes switch it off. MQTT command echoes and retained snapshots are filtered so software writes do not become false user input. |
+| **Off retains frost protection** | The controller hands operation back to the TRV's antifreeze mode with valve limits that permit firmware heating. The card displays active Antifreeze while keeping the room thermostat Off and preserving its normal heating target. |
+| **Ventilation has a separate policy** | With an open configured window, thermal learning stops and heating uses up to 15 minutes on / at least 45 minutes off. Window changes switch the current pulse's termination rule without resetting its start. A room at or below 16 °C, or radiator at or below 10 °C, triggers a window-close request. |
+| **Commands are checked against the device** | Both Sonoff valve limits are read back after commands and monitored during heating. Configuration drift is corrected; retries preserve the original opening deadline. |
+| **Thermal errors allow bounded recovery** | Missing temperature data or failed calibration uses limited fallback heating rather than leaving the room off indefinitely. |
+| **Sustained valve failure can start backup heating** | Ten minute-spaced reconnection attempts precede an incident. A confirmed failure disables only the affected controller and can notify a phone and request selected backup climates at 20 °C. |
+| **Restarts preserve operating intent** | Mode, target, enabled state and compatible learned settings survive updates. Startup verifies the valve and fresh inputs before resuming; an interrupted pulse is discarded. |
 
-## Actuator and ownership
+[Operating guide and diagnostics →](docs/operation.md)
 
-This beta supports the Sonoff opening/closing-limit interface used by the pilot. It is not a generic adapter for every TRV.
+## Installation
 
-- Close: opening limit `0`, then closing limit `100`.
-- Open: first establish closed limits, set the physical thermostat's target and heat mode, then apply the configured opening/closing limits. Pilot defaults `21 / 83` preserve the existing calibrated setting; they do **not** mean a measured water-flow percentage.
-- An optional logical valve-position helper mirrors `5` while open and `0` while closed for the existing dashboard. This beta preserves that legacy convention; it is not stem feedback.
-- The runtime serialises commands, checks inhibition between service calls, and blocks enablement if any selected legacy automation is not off. If one becomes enabled during operation, it yields control by closing and inhibiting its own heating; it automatically becomes eligible again once all selected writers are off. This ownership handover is not a valve fault. It does not disable the other automation itself.
-- Separate integration entries cannot share the same selected actuator. Undeclared writers and manual device changes are outside this ownership check.
+The current adapter supports **Sonoff TRVZB through Zigbee2MQTT**. It requires the valve's opening and closing limit entities, an external room-temperature sensor and a radiator-surface sensor. Both sensors must deliver fresh Celsius readings even when the value is unchanged.
 
-Changed valve-limit commands must be reflected by non-optimistic limit entities within 15 seconds. For the pilot Sonoff/Zigbee2MQTT path, limit state follows the Zigbee write response. Already-matching values are accepted without a new report because HA can suppress identical reports. This is not a continuous heartbeat: a silent disconnect may only be discovered at the next changed command or when the valve becomes unavailable. Limit readback does not prove physical stem movement or water flow. Unload and normal HA shutdown request closure. A HA crash, power loss or Zigbee outage cannot be made fail-closed by this Python integration; the device's outage behaviour must be checked before live commissioning.
+Install through HACS as a **custom repository**, then configure and observe one radiator before adding the other rooms. [Setup instructions →](docs/installation.md)
 
-## Emergency notification and backup heating
+## Current status
 
-In **Configure**, optionally select an **Emergency notification service** (for example `notify.mobile_app_<phone>`) and multiple **Backup climates**. A critical valve-control failure sends a mobile-app push and requests `heat` / **20 °C** on every selected unit. The room thermostat and its physical TRV cannot be selected as their own backup. Empty selections disable these optional actions.
+The integration is in beta. Automated tests cover the control engine, Home Assistant lifecycle, device communication and frontend behaviour. Hardware checks have also exercised calibration, ordinary pulses, restart recovery, physical controls and firmware frost handover.
 
-The trigger is `actuator_error`: unavailable valve/control entities, failed service calls, or missing confirmation of a changed valve limit. Sensor/calibration failures continue recovery PWM and do not activate the reserve. Controllers that are deliberately disabled and do not own the valve do not monitor it for emergencies. HA itself must be running to detect and handle a failure.
+Some curves still reach the calibration timeout and remain under investigation. Recorded room temperatures and valve-open times help assess operation, but heating-water flow and delivered heat are not measured. Water, energy and cost savings have not yet been quantified. [Results and known issues →](docs/validation.md)
 
-**New in beta13:** a new valve failure first enters `valve_reconnecting`. No mobile alert or reserve command is issued during suspicion. Ten retry slots run at +1, +2, …, +10 minutes; each sends only closing commands and requires live non-retained MQTT closed-limit feedback from the selected Sonoff/Z2M device, as well as available HA valve entities. Cached no-op values and retained MQTT messages cannot prove reconnection. The state topic comes from the selected MQTT entity's discovery diagnostics (HA 2026.9.3); unresolved bindings fail the probe rather than guessing a topic. Firmware/stem/flow confirmation remains outside this test.
+## Documentation
 
-If a retry succeeds, the suspended enabled controller resumes through normal demand, ownership, fresh-input and cooling rules. An interrupted pulse is discarded without plateau/lag learning. Explicit manual off remains off. After the tenth failed attempt, the critical incident latches and the existing notification/reserve policy runs. Only the failed room controller is disabled; other room controllers keep their enabled state and normal heating. The selected apartment backup AC list is still activated by that room incident. Initial failure is not retry1. Pending suspicion and retry count/timing survive restart, and ordinary enabled intent also persists from beta14 onward; pending closed probes resume even with ordinary heating disabled. Missed slots are not replayed in a burst: downtime can extend the wall-clock grace period. Selected legacy writers pause the probes while they own the valve. A final-close failure during shutdown is persisted as suspicion, not an immediate emergency. Existing confirmed incidents remain confirmed and are not silently reset by this update.
-
-Phase adds `valve_reconnecting`, `valve_reconnect_attempts`, `valve_reconnect_limit`, `valve_reconnect_started_at` and `valve_reconnect_next_attempt_at` attributes. Pending reconnection cannot be bypassed by Reset fault or a fresh enable request. Versions through beta12 triggered the emergency immediately; beta13 adds this confirmation period.
-
-One incident is persisted independently of calibration. A successful push and each successfully requested backup are remembered through reload/restart. Failed actions retry once per minute without blocking valve control; failure of one unit does not prevent the others. A service acknowledgement is not proof that the phone received the push or that an AC physically heats. Successful backup commands are not continually reasserted, so later manual changes are respected. A crash between an external action and its saved acknowledgement can cause a repeat.
-
-After checking the valve, use **Reset fault**, then explicitly enable normal control. **Backup ACs are never automatically turned off** by reset, disable, recovery, or restart: turn them off manually. A stored active emergency resumes pending backup/notification attempts after restart while ordinary control remains blocked by that critical incident. A new incident after reset can send a new notification. Simultaneous failures in different room entries may each notify; shared backup lists can be requested by each incident.
-
-Phase attributes expose `emergency_active`, `emergency_notification`, `backup_selected`, `backup_requested` and `backup_failed`. A requested backup means both HA service calls completed, not physical heat confirmation. Failed alarm persistence is logged; live attempts continue, but restart deduplication then cannot be guaranteed.
-
-## Sensors and tuning
-
-**New in beta 5:** Reference age is a numeric duration in minutes, with total `MM:SS` retained in its `formatted` attribute and numeric seconds in `seconds`. This prevents timer ticks from appearing in both historical and live Activity. Beta 4 introduced optional adaptive cooling; see [design and migration notes](docs/next-stage.md). Adaptation defaults to off. Enable it through Configure after updating; changing algorithm settings invalidates incompatible calibration; saved control intent remains eligible if device bindings are unchanged.
-
-Both temperature sensors must report Celsius. Fresh reports must arrive within the configured timeouts, including when temperature stays constant. The adapter subscribes to changed states, unchanged `state_reported` events, and identical forced state updates. Attribute-only changes do not create temperature samples, and the initial state snapshot after setup does not count as a fresh report.
-
-**Verify this with the actual sensor/integration.** A cached MQTT payload republished for an unrelated attribute is not necessarily a new physical temperature measurement. The setup checkbox records that verification; it does not perform it. Recorder history omits some unchanged reports and cannot establish this by itself.
-
-For MQTT sensors, Home Assistant may suppress identical values before creating any state event. Enable `force_update: true` on the temperature entities used by this controller. With Zigbee2MQTT, the device-specific discovery override is:
-
-```yaml
-homeassistant:
-  temperature:
-    force_update: true
-```
-
-This affects HA event/history recording, not the sensor's Zigbee reporting interval. Confirm the actual reporting interval separately. Version `0.1.0b2` handles the resulting forced `state_changed` events; `0.1.0b1` does not. Freshness and plateau detection cannot work from equal measurements that HA discards. See [MQTT sensor configuration](https://www.home-assistant.io/integrations/sensor.mqtt/#force_update) and [Zigbee2MQTT discovery overrides](https://www.zigbee2mqtt.io/guide/usage/integrations/home_assistant.html#overriding-discovery-properties).
-
-Defaults are provisional commissioning values:
-
-| Setting | Default | Purpose |
-|---|---:|---|
-| Reference lifetime | 3 hours | Calibrate on the next eligible heat request |
-| Start / stop room error | 0.25 / 0.10 °C | Room-demand hysteresis |
-| Remaining surface temperature excess | 30% | Cooling gate |
-| Initial / maximum usable lag | 120 / 300 seconds | Early-closing compensation |
-| Trend window | 180 seconds | Regression over actual timestamps |
-| Plateau confirmation | ≥60 seconds between fresh qualifying reports | Rolling fit and confirmation segment must both flatten |
-| Plateau slope / relative slope | ≤0.15 °C/min / ≤20% | Both conditions must hold |
-| Prior warming / rising slope | ≥3 °C / ≥0.5 °C/min | Reject flat cold starts |
-| Maximum gap in a usable curve | 120 seconds | Discard interrupted curve evidence |
-| Radiator / room timeout | 180 / 1800 seconds | Switch to bounded recovery PWM on stale data |
-| Maximum open duration | 1200 seconds | Hard exit while HA is running |
-| Peak confirmation | ≥0.2 °C decline after ≥60 seconds | Confirm the end of residual warming |
-| Startup surface excess | ≤3 °C above room | Cold-start cooling gate |
-
-A gently declining top is eligible down to the greater of the fall tolerance and absolute plateau slope (defaults: −0.15 °C/min). The rolling fit also bounds total decline, and the confirmation segment must itself flatten; a lagging fit cannot confirm renewed rapid warming. Rapid cooling, missing reports and a cold flat start cannot calibrate. Confirmation uses elapsed report time, so minute-spaced reports do not silently double the configured minute. Tuning is editable through **Configure**. Saving options reloads the integration and closes an owned valve; compatible enabled intent is preserved, while changed algorithm settings invalidate calibration.
-
-The ordinary closing threshold comes from the observed calibration trace at estimated plateau onset minus residual delay. Several usable post-close peaks refine the delay; diagnostic pulses do not. No extrapolation is allowed: an unidentifiable threshold causes `unusable_calibration`, requiring review rather than guessed heating commands.
-
-## Optional window control (beta 6)
-
-Select a **Window motor** through Configure to enable this policy for one room. Leave it empty to preserve ordinary operation. Initial installation needs explicit enable; a saved enable intent resumes after compatible reload; missing temperature reports select bounded recovery PWM. Clearing the selection removes window control.
-
-- An open, opening, closing or partially open cover selects timed termination. If a pulse is running, keep the valve open and its original start time; close when its total opening reaches **15 minutes** (or the configured maximum-open cap, if shorter). If that time has already elapsed when the window opens, close immediately. Clear plateau evidence and suspend reference/lag learning while exposed.
-- If the valve is closed when the window opens, retain ordinary room-demand hysteresis and cooling readiness. There is **no initial forced pause** merely because the window opened. The first eligible demand starts a timed pulse.
-- After any timed pulse closure, wait **at least 45 minutes** while the window remains open. Then repeat only if the room still requests heat; that completed pause replaces the ordinary cooling gate in window mode. Room satisfaction, off or protection can truncate a pulse; unknown feedback switches to timed recovery. Missed pulses are not replayed; late closure extends the next pause to at least three times elapsed opening. This describes nominal maximum 25% duty for repeated timed cycles, not a rolling flow or heat budget across changes back to ordinary mode.
-- No reference, plateau, residual-lag or peak learning occurs during window PWM. Unknown/unavailable window feedback selects conservative 15/45 timed recovery; it is not treated as a confirmed closed window.
-- While Control enabled is on, **room ≤16 °C OR radiator ≤10 °C requests immediate `cover.close_cover`**, without first testing a heating response. PWM stops at those boundaries. Window protection also operates during a latched heating fault and with the thermostat off; it is inactive when Control enabled is off or the integration is unloaded. Each fresh, independently cold sensor can trigger closure even if the other sensor is missing. If the window command fails, maintenance PWM continues while closure retries remain bounded. Stale values are not used as current measurements.
-- Do not confuse service success with physical closure. If the cover remains exposed (or unknown), closure can be retried at most once per 30 seconds while cold. Command failures are logged and exposed through **Window status**. The controller never opens the window.
-- Confirmed window closure returns a running pulse to ordinary termination **without closing/reopening the valve or resetting its start time**. A fresh reference supplies its saved closing threshold; absent/expired reference uses calibration. Plateau detection collects only fresh post-closure samples. A pulse that was exposed is excluded from residual-lag learning. The original maximum-open safety limit still applies across mode switches. If closure occurs during a PWM pause, cancel the remaining timer and resume ordinary cooling and room demand; an unconfirmed window-exposed peak is discarded.
-- **Window opening allowed**, a new binary sensor, is off when enabled control sees either cold threshold or lacks fresh temperature data. Add a condition requiring this sensor to be `on` to external automatic opening routines, including group commands that could reopen this window. Manual reopening while cold causes another emergency close. This interlock does not itself rewrite external automations.
-
-The cover state is the motor's logical feedback, not an independent contact sensor. These thresholds are the pilot owner's selected operating limits, not a certification against freezing. A sensor can miss a colder part of the radiator; closure needs working hardware, HA and communication. Existing faults remain latched and are not automatically reset by a window event.
-
-## Operation and diagnostics
-
-Each room has nine core diagnostic sensors: phase, last decision, reference temperature/age, closing temperature, restart temperature, residual warming delay, radiator trend and last peak. It also has a control-enable switch and buttons to reset a fault or calibration.
-
-Only inability to control the physical valve (`actuator_error`, failed service commands or unavailable valve entities) is a latched fault. Correct valve communication, then reset the fault with control off and enable again. A successful HA call is still command delivery, not physical position proof.
-
-Calibration/ordinary maximum-open duration is now **20 minutes**. If it expires without a usable closing condition, close and count that opening as the on portion of one recovery cycle: **at least 80 minutes off**, then retry calibration on room demand. There is no additional bonus PWM pulse after the timeout. Late closure extends the pause to at least four times elapsed opening. Keep the failed curve out of reference/lag learning.
-
-Other data/calibration errors use timed maintenance heat instead of latching off. With a closed window: up to 20 minutes on / at least 80 minutes off. With an open or unknown window: up to 15 minutes on / at least 45 minutes off; late closure extends pause to at least three times actual opening. Room satisfaction truncates/skips heat when a fresh room measurement is available. If room temperature is missing/stale, requested heat mode allows bounded maintenance PWM without inventing a room temperature. An unavailable room thermostat uses the last valid heat/off request and setpoint seen by this runtime; no initial unknown setpoint is guessed. Explicit Control off and a reported thermostat off always stop heating.
-
-A complete timed pause remains mandatory when data returns. At the next eligible cycle, fresh valid inputs return control to a calibration attempt; otherwise PWM repeats. Plateau/reference/residual-lag learning is suspended during recovery. Recovery pauses and pending calibration retries persist through reload/restart, but an open pulse never resumes; enabled intent is stored separately. Phase attributes expose `recovery_reason` and `recovery_resume_at` (UTC epoch seconds). Resetting calibration still requires control off.
-
-The emergency window-close policy remains active while control is enabled, using any independently fresh cold sensor. Data failure never substitutes fabricated readings. Actual actuator failure still stops this integration, and HA/device/network outages cannot be made fail-closed by software alone.
-
-Versioned storage retains the reference, its trace and usable delay observations. On clean shutdown/reload after successful valve closure it also records a confirmed cooling peak, frozen restart threshold/fraction, timestamp and latest sensor observations. Startup consumes that checkpoint before subscribing, so a later crash cannot resurrect a previous episode. It never restores a running pulse, room-demand latch or ready-to-open latch. Enabled intent is restored from its separate store.
-
-The selected restart threshold is also stored separately with its origin (`startup`, `base`, `adaptive`, or `manual`) and matching settings/sensor/actuator/window bindings. It survives updates and restarts even without a confirmed peak, during settling/window exposure, or after a longer downtime. Restore the parameter only after fresh post-start sensor reports, known window feedback and closed TRV limits; never restore a demand/ready latch, measured peak, PWM timer or enabled state from this record. Fresh radiator temperature still has to satisfy the restored threshold. The threshold record does not expire with the 180-second sensor timeout; that timeout still applies to current sensor readings. Settings/binding changes or malformed data invalidate it.
-
-When a complete beta 7 cooling episode validates, retain its full information. Otherwise the independent threshold can restore without inventing a peak. Restart temperature exposes `source`; `restore_status: restored_gate` identifies this threshold-only path. A missing old checkpoint is no longer a reason to replace a saved threshold with room +3 °C. Releases before beta 10 did not write the independent record.
-
-For a one-time threshold adjustment, use the action `heating_pulse_controller_v2.set_restart_temperature` with `config_entry_id` and `temperature` (°C). It is allowed only while not heating and without a fault. This sets and persists the current gate with source `manual`; it does not change the room setpoint, force a pulse, or permanently fix the threshold. The next confirmed peak recalculates the gate normally.
-
-Cooling restoration waits for fresh post-start reports from both sensors, a logically closed window (or no configured window), and closed TRV limits. Settings and selected sensor/actuator/window bindings must match. The checkpoint must still be within the configured radiator freshness timeout (180 seconds by default), temperatures/timestamps/fraction must be valid, and the radiator must not have warmed more than the peak-drop tolerance during the blind interval. Observed window opening discards it. Unknown window feedback waits within that same deadline. After restoration, current temperature must still satisfy the saved gate before heating can begin.
-
-Unconfirmed peaks, interrupted heating/calibration, window PWM, faults, stale/changed/incompatible observations and failed final closure do not qualify for full episode restoration. The independent threshold still remains eligible under its own compatibility/fresh-feedback checks; only if neither record is usable does startup use room +3 °C. Versions before beta 7 saved no cooling episode; versions before beta 10 saved no independent threshold. Missing historical information cannot be reconstructed automatically. The Restart temperature sensor's `restore_status` attribute explains whether the checkpoint was restored, absent, waiting or discarded. The live loop uses bounded memory and does not query Recorder.
-
-## Development
-
-```sh
-uv sync --locked
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
-uv run python tools/build_release.py
-```
-
-The ZIP and SHA-256 file appear in `dist/`. Its contents are restricted to integration Python, JSON, service YAML and icons. Local backups, history, credentials and developer tools are excluded.
-
-Recorded-history inspection is read-only:
-
-```sh
-uv run python tools/replay_history.py history.json \
-  --radiator sensor.example_radiator_temperature \
-  --valve input_number.example_valve_position
-```
-
-Input is the HA history response array or an object containing it under `data`. Include explicit UTC start/end times when fetching history. Replay checks the detector on the original open intervals; it cannot predict temperatures under different commands or estimate savings.
-
-CI runs lint, formatting, the test suite and packaging on Linux. See [GitHub Actions](https://github.com/blackeyeliner/heating-pulse-controller-v2/actions/workflows/check.yml) for results on each published commit. Before upgrading HA, run tests against the proposed target release and inspect relevant developer API changes. After sensor relocation, valve recalibration or firmware changes, recheck reporting and discard old calibration as appropriate.
-
-Firmware frost activity appears on the existing logical valve graph (0 idle /5 heating) and thermostat heating colour. The valve sensor attribute `estimated_opening_percent` selects the configured end position from TRV running state; it is not a measured stem position (`position_measured: false`). Unknown activity remains unknown.
-
-During autonomous frost heating the bundled dial displays red **Antifreeze** while keeping its native controls visually Off. Selecting Heat remains an ordinary thermostat mode change. The backend still reports actual heating activity in Off; only the card presentation is adapted. The owner-selected valve graph remains logical0/5, not measured stroke percentage.
+- [Design notes](docs/design-notes.md) — constraints, decisions and changes made during use.
+- [Architecture](docs/architecture.md) — control heuristics, device communication and code layout.
+- [Installation](docs/installation.md) — hardware requirements, HACS and the first heating cycle.
+- [Operating guide](docs/operation.md) — controls, diagnostics, settings and recovery.
+- [Testing and observations](docs/validation.md) — automated checks and field results.
+- [Contributing](CONTRIBUTING.md) — development setup and reporting problems.
+- [Releases](https://github.com/blackeyeliner/heating-pulse-controller-v2/releases) — downloads and version history.
