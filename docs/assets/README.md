@@ -34,7 +34,9 @@ The self-contained composite SVG embeds those sanitized PNGs and uses small unif
 
 ## Thermostat states
 
-Three equally sized screenshots showing Heating, Idle and Antifreeze while Off. Include text labels as well as colour. Use real states, or label a demonstration explicitly, and crop unrelated household information.
+[thermostat-card-states.png](thermostat-card-states.png) shows the actual bundled card rendered by Home Assistant in four states: Off, Heat while idle, Heating and Antifreeze. The cards use neutral names and demonstration values, not simultaneous readings from installed thermostats.
+
+The browser preview supplies local sample state objects to the real card and native mode feature. Device service calls are disabled in the preview, and no HA state or dashboard configuration is written. The native feature's state context is supplied explicitly because the demonstration entity IDs do not exist in HA. The screenshot preserves the real rendering, including the Off selection during Antifreeze.
 
 ## File conventions
 

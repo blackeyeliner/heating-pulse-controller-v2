@@ -52,6 +52,14 @@ The same sequence is shown below as valve commands, radiator-surface temperature
 
 Field observations put v2 at **roughly 13–15% commanded valve duty during selected regular heating runs**, compared with a reported historical average of **about 20% for v1**—approximately **25–35% less commanded-open time**. This is an observational comparison, not a matched-condition benchmark or a measurement of water or energy savings. [Measurement scope →](docs/validation.md#duty-cycle-comparison)
 
+## Thermostat card
+
+The bundled card keeps Home Assistant's standard temperature and mode controls, with colours that distinguish Off, Heat while idle, active heating and firmware frost protection. In Off, it displays the frost threshold while preserving the normal heating target.
+
+[![The custom thermostat card in four states: grey Off, blue Heat while idle, orange Heating, and red Antifreeze with Off still selected.](docs/assets/thermostat-card-states.png)](docs/assets/thermostat-card-states.png)
+
+*Actual card rendered in Home Assistant with demonstration values. Antifreeze indicates heating initiated by the TRV's firmware; the room thermostat remains Off.*
+
 ## Controls, protection and recovery
 
 The Python integration provides the native room thermostat, configuration flow, diagnostic entities, persistent state and a bundled thermostat card. It replaces the earlier collection of templates, helpers and valve-writing automations.
