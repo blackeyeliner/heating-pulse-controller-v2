@@ -64,19 +64,19 @@ The bundled card keeps Home Assistant's standard temperature and mode controls, 
 
 The Python integration provides the native room thermostat, configuration flow, diagnostic entities, persistent state and a bundled thermostat card. It replaces the earlier collection of templates, helpers and valve-writing automations.
 
-**Physical controls.** Turning the TRV dial updates the room target and can enable Heat from Off. Supported firmware mode changes switch it off. MQTT command echoes and retained snapshots are filtered so software writes do not become false user input.
+- **Physical controls.** Turning the TRV dial updates the room target and can enable Heat from Off. Supported firmware mode changes switch it off. MQTT command echoes and retained snapshots are filtered so software writes do not become false user input.
 
-**Frost protection.** The controller hands operation back to the TRV's antifreeze mode with valve limits that permit firmware heating. The card displays active Antifreeze while keeping the room thermostat Off and preserving its normal heating target.
+- **Frost protection.** The controller hands operation back to the TRV's antifreeze mode with valve limits that permit firmware heating. The card displays active Antifreeze while keeping the room thermostat Off and preserving its normal heating target.
 
-**Open windows.** With an open configured window, thermal learning stops and heating uses up to 15 minutes on / at least 45 minutes off. Window changes switch the current pulse's termination rule without resetting its start. A room at or below 16 °C, or radiator at or below 10 °C, triggers a window-close request.
+- **Open windows.** With an open configured window, thermal learning stops and heating uses up to 15 minutes on / at least 45 minutes off. Window changes switch the current pulse's termination rule without resetting its start. A room at or below 16 °C, or radiator at or below 10 °C, triggers a window-close request.
 
-**Valve verification.** Both Sonoff valve limits are read back after commands and monitored during heating. Configuration drift is corrected; retries preserve the original opening deadline.
+- **Valve verification.** Both Sonoff valve limits are read back after commands and monitored during heating. Configuration drift is corrected; retries preserve the original opening deadline.
 
-**Thermal recovery.** Missing temperature data or failed calibration uses limited fallback heating rather than leaving the room off indefinitely.
+- **Thermal recovery.** Missing temperature data or failed calibration uses limited fallback heating rather than leaving the room off indefinitely.
 
-**Backup heating.** Ten minute-spaced reconnection attempts precede an incident. A confirmed failure disables only the affected controller and can notify a phone and request selected backup climates at 20 °C.
+- **Backup heating.** Ten minute-spaced reconnection attempts precede an incident. A confirmed failure disables only the affected controller and can notify a phone and request selected backup climates at 20 °C.
 
-**Restart recovery.** Mode, target, enabled state and compatible learned settings survive updates. Startup verifies the valve and fresh inputs before resuming; an interrupted pulse is discarded.
+- **Restart recovery.** Mode, target, enabled state and compatible learned settings survive updates. Startup verifies the valve and fresh inputs before resuming; an interrupted pulse is discarded.
 
 [Operating guide and diagnostics →](docs/operation.md)
 
