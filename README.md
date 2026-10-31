@@ -46,6 +46,12 @@ The same sequence is shown below as valve commands, radiator-surface temperature
 
 *Actual Home Assistant history from the same time window, aligned horizontally. The temperature panels use different vertical scales. The valve chart's 0/5 signal represents closed/open commands at the configured operating point; it is not a measured opening percentage or water flow.*
 
+### Duty cycle compared with v1
+
+[V1](https://github.com/blackeyeliner/ha-heating-controller) pulsed a fixed low valve opening using room-temperature hysteresis, fixed radiator cutoff and restart temperatures, and a maximum opening time, checked once a minute.
+
+Field observations put v2 at **roughly 13–15% commanded valve duty during selected regular heating runs**, compared with a reported historical average of **about 20% for v1**—approximately **25–35% less commanded-open time**. This is an observational comparison, not a matched-condition benchmark or a measurement of water or energy savings. [Measurement scope →](docs/validation.md#duty-cycle-comparison)
+
 ## Controls, protection and recovery
 
 The Python integration provides the native room thermostat, configuration flow, diagnostic entities, persistent state and a bundled thermostat card. It replaces the earlier collection of templates, helpers and valve-writing automations.

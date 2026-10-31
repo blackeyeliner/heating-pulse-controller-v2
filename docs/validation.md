@@ -34,6 +34,16 @@ Checks on installed hardware have exercised:
 
 Installation checks compare deployed files with the release and run the HA configuration check before observing startup. A software state is compared with the radiator's physical response wherever possible.
 
+## Duty-cycle comparison
+
+Duty cycle is commanded-open time divided by the full observation interval, including the cooling and waiting portions between pulses. It is not the valve's displayed opening percentage.
+
+The README compares a reported historical v1 average of approximately 20% with roughly 13–15% in selected regular v2 operation. The v1 baseline is an approximate historical estimate; the original detailed history is no longer available to recalculate it. A recent selected v2 sample averaged approximately 13.3%. The quoted range describes these observations, not a whole-season or all-room average.
+
+The v2 analysis uses consecutive complete opening-to-opening cycles with a stable heating target, local AC off during the cycle and a preceding screening interval, and ordinary controller operation. Successful calibration pulses are included; restarts, reconnection and thermal-recovery intervals are excluded. Available window feedback is checked, but unmeasured door/window states and heat from neighbouring rooms cannot be ruled out. Higher-demand runs can have substantially greater duty.
+
+Against the estimated 20% baseline, 13–15% corresponds to 5–7 percentage points less duty, or 25–35% less commanded-open time per unit of elapsed time. Weather, supply temperature, targets and room conditions were not held constant between versions. These observations do not isolate the algorithm's contribution or establish water, energy or cost savings.
+
 ## Regression testing
 
 Recorded failures are used to construct focused tests. For example, a fast device response exposed a race in which a temporary MQTT listener was not ready before the request was sent. The regression test delays subscription setup and delivers an immediate response. The persistent-listener implementation must handle it without interrupting the pulse.
