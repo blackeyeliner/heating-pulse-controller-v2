@@ -241,7 +241,7 @@ async def test_duty_select_applies_live_and_persists_without_reload(hass, config
     await hass.config_entries.async_add(entry)
     await hass.async_block_till_done()
     runtime = entry.runtime_data
-    select_id = "select.office_pilot_maximum_duty_cycle"
+    select_id = "select.office_pilot_heating_pulse_controller_v2_maximum_duty_cycle"
     state = hass.states.get(select_id)
     assert state.state == "No limit"
     assert state.attributes["options"] == ["No limit", "50%", "33%", "25%"]

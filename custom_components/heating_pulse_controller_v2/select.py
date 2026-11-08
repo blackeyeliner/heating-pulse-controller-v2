@@ -2,6 +2,7 @@
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.const import EntityCategory
+from homeassistant.util import slugify
 
 from .entity import PulseEntity
 
@@ -17,6 +18,13 @@ class PulseDutySelect(PulseEntity, SelectEntity):
     _attr_icon = "mdi:percent-circle-outline"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = list(CHOICES)
+
+    def __init__(self, entry, key):
+        super().__init__(entry, key)
+        # Registered IDs follow the room, not a renamed device name.
+        self.entity_id = (
+            f"select.{slugify(entry.title)}_heating_pulse_controller_v2_maximum_duty_cycle"
+        )
 
     @property
     def current_option(self):
