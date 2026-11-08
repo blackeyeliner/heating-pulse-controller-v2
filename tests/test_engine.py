@@ -528,3 +528,55 @@ def test_declining_tail_candidate_is_validated_before_replacing_reference(existi
         assert d._retry_calibration and d.reference.temperature == 41.45
     else:
         assert c.reference is None and c._recovery_reason == "unusable_calibration"
+
+
+def test_duty_limit_delays_reopening_after_cooling_gate():
+    c = Controller(replace(Settings(), max_duty_percent=25))
+    valid_reference(c)
+    step(c, 0, 20)
+    assert c.phase == Phase.HEATING
+    step(c, 300, 49)
+    assert c.reason == "closing_threshold"
+    for t in range(330, 1200, 30):  # 300 s open at 25 % -> 900 s closed
+        step(c, t, 25)  # below the 28.7 gate after peak confirmation
+        assert not c.wants_open
+    assert c.reason == "duty_limit"
+    assert c.diagnostics(1170)["duty_resume_at"] == 1200
+    step(c, 1200, 25)
+    assert c.phase == Phase.HEATING
+
+
+def test_duty_limit_default_keeps_previous_reopening():
+    c = Controller()
+    valid_reference(c)
+    step(c, 0, 20)
+    step(c, 300, 49)
+    for t in range(330, 600, 30):
+        step(c, t, 25)
+        if c.wants_open:
+            break
+    assert c.wants_open and c.reason == "room_demand"
+
+
+def test_duty_limit_does_not_invalidate_saved_calibration():
+    saved = {k: v for k, v in Settings().__dict__.items() if k != "max_duty_percent"}
+    assert Controller(replace(Settings(), max_duty_percent=33)).settings_compatible(saved)
+
+
+@pytest.mark.parametrize("value", [0, 101])
+def test_invalid_duty_limit(value):
+    with pytest.raises(ValueError):
+        replace(Settings(), max_duty_percent=value)
+
+
+def test_duty_limit_change_applies_to_current_pause():
+    c = Controller(replace(Settings(), max_duty_percent=25))
+    valid_reference(c)
+    step(c, 0, 20)
+    step(c, 300, 49)
+    for t in range(330, 630, 30):
+        step(c, t, 25)
+    assert c.reason == "duty_limit"
+    c.settings = replace(c.settings, max_duty_percent=50)  # 300 s pause, already elapsed
+    step(c, 630, 25)
+    assert c.phase == Phase.HEATING

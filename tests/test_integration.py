@@ -222,3 +222,38 @@ async def test_real_reload_preserves_confirmed_cooling_gate(hass, config, device
     await new.set_enabled(True)
     assert new.actuator.commanded_open
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_duty_select_applies_live_and_persists_without_reload(hass, config, devices):
+    await setup_hass(hass)
+    entry = ConfigEntry(
+        version=1,
+        minor_version=1,
+        domain=DOMAIN,
+        title="Office pilot",
+        data={**config, **asdict(Settings())},
+        options={},
+        source="user",
+        unique_id=config["trv"],
+        discovery_keys=MappingProxyType({}),
+        subentries_data=[],
+    )
+    await hass.config_entries.async_add(entry)
+    await hass.async_block_till_done()
+    runtime = entry.runtime_data
+    select_id = "select.office_pilot_maximum_duty_cycle"
+    state = hass.states.get(select_id)
+    assert state.state == "No limit"
+    assert state.attributes["options"] == ["No limit", "50%", "33%", "25%"]
+    await hass.services.async_call(
+        "select", "select_option", {"entity_id": select_id, "option": "33%"}, blocking=True
+    )
+    await hass.async_block_till_done()
+    assert entry.runtime_data is runtime  # no reload, learned state kept
+    assert runtime.engine.settings.max_duty_percent == 33
+    assert entry.options["max_duty_percent"] == 33
+    assert hass.states.get(select_id).state == "33%"
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.engine.settings.max_duty_percent == 33
+    assert await hass.config_entries.async_unload(entry.entry_id)

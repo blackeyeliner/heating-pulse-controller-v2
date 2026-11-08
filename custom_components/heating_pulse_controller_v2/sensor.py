@@ -71,6 +71,8 @@ class PulseSensor(PulseEntity, SensorEntity):
                     "recovery_reason",
                     "recovery_resume_at",
                     "max_open_seconds",
+                    "max_duty_percent",
+                    "duty_resume_at",
                     "window_pwm_open_seconds",
                     "window_pwm_closed_seconds",
                     "valve_reconnecting",

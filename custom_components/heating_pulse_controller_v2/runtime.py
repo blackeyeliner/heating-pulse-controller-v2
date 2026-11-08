@@ -4,7 +4,7 @@ import asyncio
 import logging
 import math
 import time
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import timedelta
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP, UnitOfTemperature
@@ -866,6 +866,18 @@ class Runtime:
             self.engine.reset_fault()
             await self.emergency.resolve()
             self._notify()
+
+    async def set_max_duty(self, percent: float):
+        """Live per-room limit; persisted in options without reloading the entry."""
+        settings = replace(self.engine.settings, max_duty_percent=percent)
+        async with self._lock:
+            self.engine.settings = settings
+            self.config["max_duty_percent"] = percent
+            self.hass.config_entries.async_update_entry(
+                self.entry, options={**self.entry.options, "max_duty_percent": percent}
+            )
+            self._notify()
+        self._schedule()
 
     async def reset_reference(self):
         if self.enabled:

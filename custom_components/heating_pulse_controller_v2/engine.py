@@ -56,6 +56,9 @@ class Settings:
     peak_drop: float = 0.2
     peak_confirm_seconds: float = 60
     startup_excess: float = 3
+    # Ordinary cycles only: after a pulse the valve stays closed for at least
+    # open_time * (100 - limit) / limit. 100 disables the limit.
+    max_duty_percent: float = 100
 
     def __post_init__(self):
         for field in fields(self):
@@ -66,6 +69,8 @@ class Settings:
                 continue
             if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
                 raise ValueError(field.name)
+        if not 0 < self.max_duty_percent <= 100:
+            raise ValueError("max_duty_percent")
         if not 0 < self.cooling_fraction < 1 or not 0 < self.plateau_ratio < 1:
             raise ValueError("fractions")
         if self.stop_error >= self.start_error:
@@ -162,6 +167,8 @@ class Controller:
         self._recovery_deadline = 0.0
         self._retry_calibration = False
         self._pulse_exposed = False
+        self._duty_closed_at = -math.inf
+        self._duty_open_seconds = 0.0
 
     @property
     def wants_open(self) -> bool:
@@ -171,6 +178,12 @@ class Controller:
             Phase.WINDOW_HEATING,
             Phase.RECOVERY_HEATING,
         )
+
+    @property
+    def duty_resume_at(self) -> float:
+        """Earliest ordinary reopening under the current limit; a change applies at once."""
+        limit = self.settings.max_duty_percent
+        return self._duty_closed_at + self._duty_open_seconds * (100 - limit) / limit
 
     @property
     def lag(self) -> float:
@@ -344,6 +357,10 @@ class Controller:
             return
         self.phase = Phase.IDLE
         if not self._demand:
+            return
+        if now < self.duty_resume_at:
+            self.phase = Phase.COOLING
+            self.reason = "duty_limit"
             return
         if self.reference and self.stop_temperature is None:
             self.trip("unusable_calibration", now)
@@ -574,6 +591,9 @@ class Controller:
         self.stop_temperature = self._stop_for(self.reference)
 
     def _close(self, now: float, reason: str):
+        if self.opened_at is not None:
+            self._duty_closed_at = now
+            self._duty_open_seconds = max(0, now - self.opened_at)
         self._learn_lag = (
             self.phase == Phase.HEATING
             and reason == "closing_threshold"
@@ -906,13 +926,18 @@ class Controller:
             "cooling_full_error",
             "room_trend_window",
             "cooling_min_gap",
+            "max_duty_percent",
         }
         defaults = asdict(Settings())
         values = {**{k: defaults[k] for k in optional}, **saved}
         # Operational timeout increase does not change a measured reference/gate.
         if values.get("max_open_seconds") == 900 and self.settings.max_open_seconds == 1200:
             values["max_open_seconds"] = 1200
-        return values == asdict(self.settings)
+        # The duty limit only delays reopening; it never changes a reference or gate.
+        values.pop("max_duty_percent")
+        current = asdict(self.settings)
+        current.pop("max_duty_percent")
+        return values == current
 
     def restore(self, data: dict, now: float) -> bool:
         """Restore calibration only. Fail closed on malformed/incompatible storage."""
@@ -977,6 +1002,8 @@ class Controller:
             "fault": self.fault,
             "recovery_reason": self._recovery_reason,
             "max_open_seconds": self.settings.max_open_seconds,
+            "max_duty_percent": self.settings.max_duty_percent,
+            "duty_resume_at": self.duty_resume_at if self.duty_resume_at > now else None,
             "window_pwm_open_seconds": PWM_OPEN_SECONDS,
             "window_pwm_closed_seconds": PWM_CLOSED_SECONDS,
             "recovery_resume_at": (

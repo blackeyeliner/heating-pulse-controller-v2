@@ -39,6 +39,7 @@ Firmware protection uses the TRV's temperature source, which may differ substant
 | Restart temperature | Radiator temperature below which another pulse may become eligible. Attributes show its source and restoration status. |
 | Radiator trend | Estimated temperature slope in °C/min. Plateau detection also checks the preceding rise and confirmation interval. |
 | Residual warming delay | Learned delay between closure and the end of surface warming, using suitable observations. |
+| Maximum duty cycle | Dropdown (No limit, 50%, 33%, 25%). Changes apply immediately, including to a pause already in progress, and are saved in the entry options without a reload. |
 | Valve position | Logical 0 / 5 display: closed/open command, or unknown when unconfirmed. |
 
 The valve graph retains the earlier controller's 0 / 5 convention. It is not measured valve travel. In frost mode it follows reported firmware activity. Its `estimated_opening_percent` attribute is also an estimate; `position_measured` remains false.
@@ -65,6 +66,9 @@ Change settings after inspecting complete heating and cooling cycles. A long pul
 | Maximum opening | 1200 seconds | Limit each opening while the runtime is functioning. |
 | Peak confirmation | 0.2 °C decline after at least 60 seconds | Confirm the end of residual warming. |
 | Startup surface excess | 3 °C above room | Initial cooling threshold if no stored gate can be used. |
+| Maximum duty cycle | 100% (no limit) | After an ordinary or calibration pulse, stay closed for at least `open time × (100 − limit) / limit`. |
+
+The duty limit is an extra reopening condition next to the restart temperature, not a replacement: room demand, the cooling gate and the duty pause must all allow a new pulse. While only the duty pause blocks reopening, Phase shows `cooling` and Last decision shows `duty_limit`. Window PWM and timeout recovery keep their own stricter timing. A pending duty pause is not restored after a Home Assistant restart; the restart temperature still is.
 
 Maximum opening is configurable per entry. Saved options take precedence over the software defaults. The [adaptive cooling reference](next-stage.md) gives the threshold calculation and its bounds.
 
