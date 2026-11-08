@@ -78,7 +78,7 @@ Set the native thermostat to **Heat** with a target above the room temperature, 
 | Calibration | Phase becomes `calibrating`; the valve opens and the radiator temperature begins to rise. |
 | Closure | A successful calibration sets Reference temperature and Closing temperature. Other stop reasons appear in Last decision. |
 | Residual warming | The valve is closed, but the surface may continue warming before reaching its peak. |
-| Cooling | The radiator cools toward Restart temperature. A new pulse also requires room demand. |
+| Cooling | The radiator cools toward Restart temperature. A new pulse also requires room demand and, if a maximum duty cycle is set, the minimum closed time (Last decision `duty_limit`). |
 | Ordinary pulse | Heating uses the learned cutoff, while continuing to check for a lower plateau. |
 
 Compare the software states with the radiator's physical response. If it stays cold during a reported opening, or calibration repeatedly reaches its time limit, retain the temperature and decision history for investigation. Confirmed valve settings alone cannot establish water flow.

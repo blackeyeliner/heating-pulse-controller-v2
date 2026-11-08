@@ -25,7 +25,7 @@ Each room has a controller that combines temperature histories, the room target,
 
 **Pulse termination accounts for residual warming.** Suitable completed pulses provide an estimate of how long the surface continues warming after closure. That delay and the calibration trace determine an earlier cutoff for subsequent pulses. A pulse can also end when the room is satisfied, a plateau is confirmed, an opening limit is reached or another control condition requires closure. A single radiator-temperature reading does not decide the outcome.
 
-**The interval between pulses adapts to the room's progress.** After peak confirmation, the controller selects a cooling threshold relative to the room temperature. In adaptive mode, a larger shortfall with little recent warming raises that threshold, allowing another pulse sooner. If the room is already warming toward its target, the algorithm allows more cooling. The adjustment is bounded, requires sufficient history and stays fixed for that cooling episode. Reopening still requires room demand; it is not scheduled for a fixed number of minutes later. Adaptive cooling is configurable and defaults to off for new entries.
+**The interval between pulses adapts to the room's progress.** After peak confirmation, the controller selects a cooling threshold relative to the room temperature. In adaptive mode, a larger shortfall with little recent warming raises that threshold, allowing another pulse sooner. If the room is already warming toward its target, the algorithm allows more cooling. The adjustment is bounded, requires sufficient history and stays fixed for that cooling episode. Reopening still requires room demand; it is not scheduled for a fixed number of minutes later. Adaptive cooling is configurable and defaults to off for new entries. An optional per-room maximum duty cycle adds a minimum closed time proportional to the preceding pulse, for radiators that cool quickly enough to approach 50% open time.
 
 [![Illustrative radiator heating cycle showing valve closure before the surface peak, cooling, and an earlier restart when room demand is greater.](docs/assets/heating-cycle.svg)](docs/assets/heating-cycle.svg)
 
@@ -65,6 +65,8 @@ The Python integration provides the native room thermostat, configuration flow, 
 
 - **Open windows.** With an open configured window, thermal learning stops and heating uses up to 15 minutes on / at least 45 minutes off. Window changes switch the current pulse's termination rule without resetting its start. A room at or below 16 °C, or radiator at or below 10 °C, triggers a window-close request.
 
+- **Duty cycle limit.** Each room can cap ordinary pulsing at 50%, 33% or 25% from a dropdown entity, or any value in the options. After a pulse the valve stays closed for at least `open time × (100 − limit) / limit`, in addition to the cooling threshold. Changes apply immediately without a reload. The default is no limit.
+
 - **Valve verification.** Both Sonoff valve limits are read back after commands and monitored during heating. Configuration drift is corrected; retries preserve the original opening deadline.
 
 - **Thermal recovery.** Missing temperature data or failed calibration uses limited fallback heating rather than leaving the room off indefinitely.
@@ -77,7 +79,7 @@ The Python integration provides the native room thermostat, configuration flow, 
 
 ## Installation
 
-The current adapter supports **Sonoff TRVZB through Zigbee2MQTT**. It requires the valve's opening and closing limit entities, an external room-temperature sensor and a radiator-surface sensor. Both sensors must deliver fresh Celsius readings even when the value is unchanged.
+The current adapter supports **[Sonoff TRVZB](https://www.zigbee2mqtt.io/devices/TRVZB.html) through Zigbee2MQTT**. It requires the valve's opening and closing limit entities, an external room-temperature sensor and a radiator-surface sensor. Both sensors must deliver fresh Celsius readings even when the value is unchanged.
 
 Hardware used with this controller:
 
