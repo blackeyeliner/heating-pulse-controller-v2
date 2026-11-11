@@ -337,7 +337,14 @@ class Controller:
             if not self._demand:
                 self._close(now, "room_satisfied")
             elif now - self.opened_at >= self.settings.max_open_seconds:
-                self.trip("maximum_open_duration", now)
+                # A flat window already under confirmation is the plateau the
+                # limit was waiting for; only an unconfirmed top is a timeout.
+                if fresh_report:
+                    self._plateau()
+                if self._candidate and self._accept_reference(now):
+                    self._close(now, "plateau_at_limit")
+                else:
+                    self._timeout(now)
             elif fresh_report and self._plateau():
                 accepted = self._accept_reference(now)
                 self._close(now, "plateau" if accepted else "calibration_rejected")
@@ -590,6 +597,19 @@ class Controller:
     def _update_stop(self):
         self.stop_temperature = self._stop_for(self.reference)
 
+    def _timeout(self, now: float):
+        """Close an unconfirmed top as an ordinary pulse and recalibrate next.
+
+        No fixed pause: the restart temperature and the duty limit decide reopening.
+        """
+        self._close(now, "maximum_open_duration")
+        self._retry_calibration = True
+        self._trace.clear()
+        self._candidate.clear()
+        self.trend = None
+        self._max_slope = 0
+        self.revision += 1
+
     def _close(self, now: float, reason: str):
         if self.opened_at is not None:
             self._duty_closed_at = now
@@ -752,9 +772,7 @@ class Controller:
         self._learn_lag = False
         if reason == "unusable_calibration":
             self.reset_reference()
-        if reason == "maximum_open_duration" or (
-            self.closed_at == now and self.opened_at is not None
-        ):
+        if self.closed_at == now and self.opened_at is not None:
             self._close_recovery(now, reason)
         elif self.wants_open:
             self.phase = Phase.RECOVERY_HEATING

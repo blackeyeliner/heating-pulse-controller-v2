@@ -44,18 +44,14 @@ def test_data_recovery_does_not_bypass_pause_then_recalibrates():
     assert c.phase == Phase.CALIBRATING and c.fault is None
 
 
-def test_timeout_pause_survives_restart_without_reference():
+def test_timeout_recalibration_survives_restart():
     c = Controller()
+    valid_reference(c, at=-60)
     for at in range(0, 1201, 60):
         step(c, at, 20)
-    stored = c.dump()
     d = Controller()
-    d.restore(stored, 1500)
-    assert d._recovery_next_open == 6000
-    step(d, 5999, 20)
-    assert not d.wants_open
-    step(d, 6000, 20)
-    assert d.phase == Phase.CALIBRATING
+    d.restore(c.dump(), 1500)
+    assert d._retry_calibration
 
 
 def test_shutdown_during_recovery_heating_preserves_remaining_pause():
@@ -71,15 +67,15 @@ def test_shutdown_during_recovery_heating_preserves_remaining_pause():
     assert d.phase == Phase.CALIBRATING
 
 
-def test_window_changes_do_not_cancel_timeout_backoff():
-    c = Controller()
+def test_window_changes_do_not_cancel_timeout_duty_pause():
+    c = Controller(replace(Settings(), max_duty_percent=33))
     for at in range(0, 1201, 60):
         step(c, at, 20)
-    for at, opened in [(1300, True), (1400, False)]:
+    for at, opened in [(1300, True), (1400, False), (3000, False)]:
         c.room_report(20, at)
-        c.radiator_report(25, at)
+        c.radiator_report(25 if at < 3000 else 20, at)
         c.evaluate(at, enabled=True, heat_mode=True, target=24, window_open=opened)
-        assert not c.wants_open and c._recovery_next_open == 6000
+        assert not c.wants_open
 
 
 def test_missing_sensors_with_open_window_use_fifteen_forty_five_and_manual_off_wins():
@@ -160,7 +156,7 @@ async def test_runtime_unavailable_valve_is_the_critical_fault(hass, entry, devi
     await r.stop()
 
 
-async def test_runtime_clean_reload_retains_timeout_without_confirmed_peak(hass, entry, devices):
+async def test_runtime_clean_reload_retains_timeout_recalibration(hass, entry, devices):
     r = Runtime(hass, entry)
     r.now = lambda: 1200
     for at in range(0, 1201, 60):
@@ -174,8 +170,7 @@ async def test_runtime_clean_reload_retains_timeout_without_confirmed_peak(hass,
     d.store.async_save = AsyncMock()
     await d.start()
     await fresh(hass)
-    await d.set_enabled(True)
-    assert d.engine.phase == Phase.RECOVERY_PAUSE and not d.actuator.commanded_open
+    assert d.engine._retry_calibration
     await d.stop()
 
 

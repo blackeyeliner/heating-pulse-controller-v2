@@ -89,11 +89,11 @@ Optional adaptive cooling raises this threshold within bounds when the room rema
 | Window opens during heating | Stop thermal learning and apply a 15-minute limit measured from the original pulse start. |
 | Window closes during heating | Restore ordinary plateau/cutoff checks without restarting the pulse. |
 | Window-timed pulse ends | Wait at least 45 minutes before another eligible pulse. |
-| Maximum opening duration reached | Close and enter recovery; the pause is at least four times the actual opening duration. |
+| Maximum opening duration reached | If a flat top is already under confirmation, accept it as the plateau and close normally (`plateau_at_limit`). Otherwise close as an ordinary pulse (`maximum_open_duration`): the restart temperature and the room's duty limit decide when it may reopen, and the next pulse recalibrates. |
 | Temperature or other non-actuator input fails | Use bounded maintenance pulses while heat is requested. |
 | Room becomes warm enough or is switched Off | End ordinary heating. |
 
-The configured maximum opening remains a separate limit. Its software default is 20 minutes, giving a timeout-recovery pause of at least 80 minutes. The operating guide describes the [recovery rules](operation.md#recovery-and-emergency-response).
+The configured maximum opening remains a separate limit; its software default is 20 minutes. A timeout has no fixed pause of its own. The operating guide describes the [recovery rules](operation.md#recovery-and-emergency-response).
 
 With an open configured window, a fresh room reading at or below 16 °C, or radiator reading at or below 10 °C, requests immediate window closure while control is enabled.
 

@@ -68,9 +68,9 @@ Change settings after inspecting complete heating and cooling cycles. A long pul
 | Startup surface excess | 3 °C above room | Initial cooling threshold if no stored gate can be used. |
 | Maximum duty cycle | 100% (no limit) | After an ordinary or calibration pulse, stay closed for at least `open time × (100 − limit) / limit`. |
 
-The duty limit is an extra reopening condition next to the restart temperature, not a replacement: room demand, the cooling gate and the duty pause must all allow a new pulse. While only the duty pause blocks reopening, Phase shows `cooling` and Last decision shows `duty_limit`. Window PWM and timeout recovery keep their own stricter timing. A pending duty pause is not restored after a Home Assistant restart; the restart temperature still is.
+The duty limit is an extra reopening condition next to the restart temperature, not a replacement: room demand, the cooling gate and the duty pause must all allow a new pulse. While only the duty pause blocks reopening, Phase shows `cooling` and Last decision shows `duty_limit`. Window PWM and input-failure recovery keep their own timing; an opening-limit timeout uses the duty pause. A pending duty pause is not restored after a Home Assistant restart; the restart temperature still is.
 
-Maximum opening is configurable per entry. Saved options take precedence over the software defaults. The [adaptive cooling reference](next-stage.md) gives the threshold calculation and its bounds.
+When the limit arrives while a flat top is already under confirmation, that window is accepted as the plateau and Last decision shows `plateau_at_limit`; only a top that is still rising or falling counts as a timeout. Maximum opening is configurable per entry. Saved options take precedence over the software defaults. The [adaptive cooling reference](next-stage.md) gives the threshold calculation and its bounds.
 
 For a one-time adjustment of the current restart threshold, call `heating_pulse_controller_v2.set_restart_temperature` with `config_entry_id` and `temperature`. This is allowed while not heating and without a fault. The value is saved as a manual threshold; the next confirmed peak recalculates it. It does not change the room target or force a pulse.
 
@@ -80,7 +80,7 @@ Changing algorithm options reloads the entry and may invalidate incompatible cal
 
 ### Temperature and calibration problems
 
-Reaching the opening limit closes the valve and starts a recovery pause at least four times the actual open duration. With the default 20-minute opening limit, the pause is at least 80 minutes. When the pause ends, the controller retries calibration if the room still needs heat.
+Reaching the opening limit without a plateau closes the valve as an ordinary pulse with Last decision `maximum_open_duration`. There is no fixed pause: the restart temperature and the room's maximum duty cycle decide when it may reopen. At 33%, a 15-minute timeout is followed by at least 30 minutes closed; with No limit, only the restart temperature applies. The next pulse recalibrates, and that requirement survives a restart.
 
 Other non-actuator input failures use bounded maintenance pulses. With a closed window, the opening limit comes from the room's configured maximum, followed by at least four times that duration closed. With an open or unknown configured window, the policy is up to 15 minutes open and at least 45 minutes closed; late closure extends the pause. Fresh room satisfaction and explicit Off still stop heating.
 

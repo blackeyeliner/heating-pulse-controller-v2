@@ -144,16 +144,31 @@ def test_ticks_without_reports_never_establish_plateau():
     assert c.phase == Phase.RECOVERY_HEATING
 
 
-def test_timeout_retries_after_one_twenty_percent_cycle():
-    c = Controller()
+def test_timeout_pause_follows_duty_limit_then_recalibrates():
+    c = Controller(replace(Settings(), max_duty_percent=25))
+    valid_reference(c, at=-60)
     for t in range(0, 1201, 30):
         step(c, t, 20)
-    assert c.fault is None and c.phase == Phase.RECOVERY_PAUSE
-    assert c._recovery_next_open == 6000
-    step(c, 5999, 20)
+    assert c.reason == "maximum_open_duration" and c._recovery_reason is None
+    assert c.duty_resume_at == 1200 + 3 * 1200
+    step(c, 4799, 20)
+    assert not c.wants_open and c.reason == "duty_limit"
+    step(c, 4800, 20)
+    assert c.phase == Phase.CALIBRATING and c.reason == "reference_expired"
+
+
+def test_timeout_without_duty_limit_waits_only_for_restart_temperature():
+    c = Controller()
+    for t in range(0, 1201, 30):
+        step(c, t, 20 + t / 30)
+    assert c.reason == "maximum_open_duration" and not c.wants_open
+    step(c, 1260, 59)
     assert not c.wants_open
-    step(c, 6000, 20)
-    assert c.phase == Phase.CALIBRATING
+    for t in range(1290, 2400, 30):
+        step(c, t, 21)
+        if c.wants_open:
+            break
+    assert c.phase == Phase.CALIBRATING and t < 2400
 
 
 def test_declining_temperature_does_not_calibrate():
@@ -580,3 +595,65 @@ def test_duty_limit_change_applies_to_current_pause():
     c.settings = replace(c.settings, max_duty_percent=50)  # 300 s pause, already elapsed
     step(c, 630, 25)
     assert c.phase == Phase.HEATING
+
+
+# Living Room calibration of 2026-11-08 07:37 local: a supply dip at the top
+# reset confirmation; the next flat window was 2 s short of its minute.
+LIVING_ROOM_TIMEOUT_TRACE = [
+    (0, 30.7),
+    (40, 32.4),
+    (50, 34.3),
+    (60, 36.2),
+    (70, 38.0),
+    (80, 39.6),
+    (91, 41.2),
+    (101, 42.6),
+    (111, 43.9),
+    (121, 45.1),
+    (131, 46.2),
+    (141, 47.2),
+    (151, 48.3),
+    (161, 49.3),
+    (172, 50.6),
+    (191, 51.6),
+    (202, 52.6),
+    (227, 53.6),
+    (257, 54.6),
+    (312, 55.6),
+    (372, 55.9),
+    (433, 56.2),
+    (493, 56.1),
+    (538, 55.1),
+    (599, 54.4),
+    (659, 55.0),
+    (720, 55.6),
+    (780, 55.8),
+    (840, 55.8),
+    (898, 55.7),
+]
+
+
+def replay_to_limit(trace):
+    c = Controller(replace(Settings(), max_open_seconds=900))
+    c._cooling_required = False  # the restart gate had already been passed
+    for t, value in trace:
+        step(c, t, value, room=21.6, target=22)
+    assert c.phase == Phase.CALIBRATING
+    c.evaluate(900, enabled=True, heat_mode=True, target=22)
+    return c
+
+
+def test_flat_window_at_max_open_is_accepted_as_plateau():
+    c = replay_to_limit(LIVING_ROOM_TIMEOUT_TRACE)
+    assert c.reason == "plateau_at_limit"
+    assert c.phase == Phase.SETTLING
+    assert c._recovery_reason is None
+    assert c.reference.temperature == 55.75 and c.reference.measured_at == 900
+    assert 30.7 < c.stop_temperature < 55.75
+
+
+def test_still_rising_at_max_open_remains_a_timeout():
+    rising = [(t, 30.7 + t / 30) for t in range(0, 900, 30)]
+    c = replay_to_limit(rising)
+    assert c.reason == "maximum_open_duration" and c._recovery_reason is None
+    assert c.reference is None and c._retry_calibration

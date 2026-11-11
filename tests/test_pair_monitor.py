@@ -233,6 +233,6 @@ async def test_missing_diagnostic_cannot_extend_fifteen_minute_deadline(hass, en
     r.engine.radiator_report(20, clock[0])
     await r._process()
     assert not r.engine.wants_open and not r.reconnect.active
-    assert r.engine.diagnostics(clock[0])["recovery_reason"] == "maximum_open_duration"
+    assert r.engine.reason == "maximum_open_duration"
     assert r.actuator.last_pair == (0, 100)
     await r.stop()

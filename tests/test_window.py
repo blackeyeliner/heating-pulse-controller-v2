@@ -404,4 +404,4 @@ def test_original_maximum_open_limit_survives_window_changes(close_window):
     assert not c.wants_open
     assert c.fault is None
     if close_window:
-        assert c._recovery_reason == "maximum_open_duration"
+        assert c.reason == "maximum_open_duration" and c._recovery_reason is None
