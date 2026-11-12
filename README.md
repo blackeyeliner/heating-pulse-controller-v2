@@ -1,108 +1,111 @@
 # Heating Pulse Controller
 
-A custom Home Assistant integration for water-filled radiators, with adaptive pulse control, physical thermostat input and device-level frost protection. It learns from each radiator's heating and cooling curves to adjust pulse termination and the interval before reheating.
+Radiator heating in short pulses, controlled by Home Assistant.
+
+Heating Pulse Controller learns how each radiator heats up and cools down, then uses that behaviour to control the valve:
+
+- **Make use of stored heat.** Anticipate the temperature rise after valve closure and close early, letting the radiator continue heating the room.
+- **Short pulses at minimum opening.** Use the valve's smallest reliable opening that provides enough flow to heat the radiator quickly, then close it while the radiator releases its stored heat.
+- **Adapt to each radiator.** Learn from its heating and cooling response, and refresh calibration as the hot-water supply temperature changes.
+- **External room temperature feedback.** Control heating using a separate room sensor rather than the temperature measured beside the valve.
+- **Use radiator temperature feedback.** Measure the radiator surface to decide when to end a pulse and when it has cooled enough to heat again.
+- **Window sensor support.** With a window sensor configured, suspend thermal learning and limit heating while the window is open.
+- **Configurable duty cycle and cooling thresholds.** Set a maximum duty cycle and tune how far the radiator cools between pulses. Optional adaptive cooling shortens that wait when the room is warming too slowly.
+- **Diagnostics in Home Assistant.** Inspect learned temperatures, valve commands and decision reasons.
 
 [![Validate integration](https://github.com/blackeyeliner/heating-pulse-controller-v2/actions/workflows/check.yml/badge.svg)](https://github.com/blackeyeliner/heating-pulse-controller-v2/actions/workflows/check.yml)
 [![Release](https://img.shields.io/github/v/release/blackeyeliner/heating-pulse-controller-v2?include_prereleases&label=beta)](https://github.com/blackeyeliner/heating-pulse-controller-v2/releases)
 
-[Installation](docs/installation.md) · [Algorithm](docs/architecture.md) · [Design notes](docs/design-notes.md) · [Testing and observations](docs/validation.md)
+[Install](#installation) · [How it works](#how-it-works) · [Operating guide](docs/operation.md)
 
-The original TRV control admitted more hot water than the radiator needed. Earlier firmware used 100% opening as its only heating position. It did not account for how quickly the radiator heated, how long it continued releasing heat after closure, or how much useful heating remained during cooldown. The result was temperature overshoot and unnecessary water circulation.
+[![Thermostat card showing Off, Heat while idle, Heating and Antifreeze.](docs/assets/thermostat-card-states.png)](docs/assets/thermostat-card-states.png)
 
-Under a high-pressure supply, even the smallest reliable opening can heat a radiator quickly. Increasing flow beyond that point sends more heat into the return pipe without a proportional increase in heat delivered to the room. Closing the valve also does not stop heating immediately: the radiator's surface can continue warming, then release stored heat over a much longer cooling period.
+*A custom thermostat card developed for this integration, based on Home Assistant's standard card. It keeps the native look and controls while adding controller-specific state colours and frost-protection display. Antifreeze shows firmware heating while the room thermostat remains Off.*
 
-The valve's built-in sensor measures conditions around the valve, which may sit beside pipework, beneath a window or close to the floor. Its reading can differ substantially from the temperature in the occupied part of the room—and that difference changes during heating and ventilation, so a fixed offset cannot reliably correct it. Changing supply temperatures also make a fixed radiator cutoff unreliable. The stock controller offered little visibility into its decisions, making these behaviours difficult to diagnose or adjust.
+## What you need
 
-Heating Pulse Controller uses external room and radiator measurements to control **when water flows and for how long**, holding the valve at its **minimum reliable opening**. It learns a cutoff that accounts for residual warming, uses the cooling period between pulses, and can shorten that interval when the room remains below target and is warming too slowly. Calibration, thresholds, valve commands and decision reasons are exposed in Home Assistant, so its behaviour can be inspected rather than inferred from room temperature alone.
+| Component | Requirement |
+|---|---|
+| Home Assistant | 2026.9.0 or later |
+| Radiator valve | **Sonoff TRVZB through Zigbee2MQTT**, with opening and closing limit entities |
+| Room temperature | An external sensor away from the radiator's heat |
+| Radiator temperature | A sensor attached to the radiator surface |
+
+Both sensors must report fresh Celsius measurements **even when the temperature hasn't changed**. Otherwise, the controller cannot tell a steady temperature from a sensor that has stopped reporting. See [sensor hardware and reporting setup](docs/installation.md#sensor-hardware-used).
+
+**Currently in beta.** Start with one radiator and observe a complete heating and cooling cycle before adding more.
+
+## Why pulse control?
+
+A radiator keeps heating the room after its valve closes. With a high-pressure supply, even a small valve opening can heat it quickly. Meanwhile, the temperature beside the valve may be quite different from the temperature where people sit.
+
+This controller measures both the room and the radiator. It uses the valve's **minimum reliable opening**, then controls how long it stays open and how much the radiator cools between pulses. You can inspect its learned temperatures, valve commands and decision reasons in Home Assistant.
 
 [![System diagram showing room and radiator sensors, controller commands and valve readback, with physical controls and protection modes.](docs/assets/heating-system.svg)](docs/assets/heating-system.svg)
 
-## Adaptive heating control
+## How it works
 
-Each room has a controller that combines temperature histories, the room target, its previous calibration and the state of the valve. Decisions are made by a state machine; the sensors supply measurements rather than directly switching heating.
+1. **Learn the radiator.** During calibration, let it heat until its temperature levels off. This establishes a reference for the current supply conditions.
+2. **Close before the peak.** Learn from the warming that continues after closure and use it to choose an earlier cutoff for later pulses.
+3. **Let it cool.** Wait until the radiator reaches its cooling threshold. Another pulse starts only if the room still needs heat and any duty-limit pause has elapsed.
 
-**Calibration establishes a usable reference for current conditions.** During a needed heating pulse, the algorithm looks for sustained flattening after a meaningful temperature rise. It checks sample freshness, gaps and slope before accepting a plateau. The reference expires after three hours, while ordinary pulses continue checking for a lower plateau so cooler supply water can be recognised earlier.
+[![Illustrative heating cycle: valve closure, residual warming, cooling and the next pulse.](docs/assets/heating-cycle.svg)](docs/assets/heating-cycle.svg)
 
-**Pulse termination accounts for residual warming.** Suitable completed pulses provide an estimate of how long the surface continues warming after closure. That delay and the calibration trace determine an earlier cutoff for subsequent pulses. A pulse can also end when the room is satisfied, a plateau is confirmed, an opening limit is reached or another control condition requires closure. A single radiator-temperature reading does not decide the outcome.
+*Illustrative curves. The lower panels show alternative room conditions, not measured results.*
 
-**The interval between pulses adapts to the room's progress.** After peak confirmation, the controller selects a cooling threshold relative to the room temperature. In adaptive mode, a larger shortfall with little recent warming raises that threshold, allowing another pulse sooner. If the room is already warming toward its target, the algorithm allows more cooling. The adjustment is bounded, requires sufficient history and stays fixed for that cooling episode. Reopening still requires room demand; it is not scheduled for a fixed number of minutes later. Adaptive cooling is configurable and defaults to off for new entries. An optional per-room maximum duty cycle adds a minimum closed time proportional to the preceding pulse, for radiators that cool quickly enough to approach 50% open time.
+Calibration is refreshed periodically, and ordinary pulses check for cooler supply water. Optional **adaptive cooling** allows another pulse sooner when the room is below target and warming too slowly. It is off by default.
 
-[![Illustrative radiator heating cycle showing valve closure before the surface peak, cooling, and an earlier restart when room demand is greater.](docs/assets/heating-cycle.svg)](docs/assets/heating-cycle.svg)
+[Full algorithm and state transitions →](docs/architecture.md)
 
-*Illustrative curves, not measured data. The lower panels show alternative room conditions. One restart threshold applies throughout each cooling episode; reaching it starts another pulse only if the room still needs heat.*
+## Features
 
-[Algorithm, thresholds and state transitions →](docs/architecture.md)
+- **Physical controls:** turn the TRV dial to change the room target. Supported firmware mode changes also switch heating off.
+- **Frost protection:** Off hands heating back to the TRV's antifreeze mode and preserves your normal heating target.
+- **Window input:** pause thermal learning and use limited heating pulses while a configured window is open.
+- **Duty limits:** choose 50%, 33% or 25% from a per-room dropdown, or leave ordinary pulsing uncapped.
+- **Valve checks:** read back both valve limits after commands and during heating; correct settings that have drifted.
+- **Recovery:** use limited fallback heating when temperature data or calibration fails. A confirmed valve failure can trigger a notification and configured backup heating.
+- **Restart support:** retain the mode, target and compatible learned settings. Verify the valve and fresh sensor readings before resuming.
 
-### Recorded operation
-
-The same sequence is shown below as valve commands, radiator-surface temperature and room temperature. Brief openings are followed by much longer cooling tails. Radiator peaks vary across the period, while the room temperature moves within a much narrower range.
-
-[![Recorded heating cycles: short valve commands above radiator heating and cooling curves, with the corresponding room-temperature response below.](docs/assets/recorded-heating-cycles.png)](docs/assets/recorded-heating-cycles.png)
-
-*Actual Home Assistant history from the same time window, aligned horizontally. The temperature panels use different vertical scales. The valve chart's 0/5 signal represents closed/open commands at the configured operating point; it is not a measured opening percentage or water flow.*
-
-### Duty cycle compared with v1
-
-[V1](https://github.com/blackeyeliner/ha-heating-controller) pulsed a fixed low valve opening using room-temperature hysteresis, fixed radiator cutoff and restart temperatures, and a maximum opening time, checked once a minute.
-
-Field observations put v2 at **roughly 13–15% commanded valve duty during selected regular heating runs**, compared with a reported historical average of **about 20% for v1**—approximately **25–35% less commanded-open time**. This is an observational comparison, not a matched-condition benchmark or a measurement of water or energy savings. [Measurement scope →](docs/validation.md#duty-cycle-comparison)
-
-## Thermostat card
-
-The bundled card keeps Home Assistant's standard temperature and mode controls, with colours that distinguish Off, Heat while idle, active heating and firmware frost protection. In Off, it displays the frost threshold while preserving the normal heating target.
-
-[![The custom thermostat card in four states: grey Off, blue Heat while idle, orange Heating, and red Antifreeze with Off still selected.](docs/assets/thermostat-card-states.png)](docs/assets/thermostat-card-states.png)
-
-*Actual card rendered in Home Assistant with demonstration values. Antifreeze indicates heating initiated by the TRV's firmware; the room thermostat remains Off.*
-
-## Controls, protection and recovery
-
-The Python integration provides the native room thermostat, configuration flow, diagnostic entities, persistent state and a bundled thermostat card. It replaces the earlier collection of templates, helpers and valve-writing automations.
-
-- **Physical controls.** Turning the TRV dial updates the room target and can enable Heat from Off. Supported firmware mode changes switch it off. MQTT command echoes and retained snapshots are filtered so software writes do not become false user input.
-
-- **Frost protection.** The controller hands operation back to the TRV's antifreeze mode with valve limits that permit firmware heating. The card displays active Antifreeze while keeping the room thermostat Off and preserving its normal heating target.
-
-- **Open windows.** With an open configured window, thermal learning stops and heating uses up to 15 minutes on / at least 45 minutes off. Window changes switch the current pulse's termination rule without resetting its start. A room at or below 16 °C, or radiator at or below 10 °C, triggers a window-close request.
-
-- **Duty cycle limit.** Each room can cap ordinary pulsing at 50%, 33% or 25% from a dropdown entity, or any value in the options. After a pulse the valve stays closed for at least `open time × (100 − limit) / limit`, in addition to the cooling threshold. Changes apply immediately without a reload. The default is no limit.
-
-- **Valve verification.** Both Sonoff valve limits are read back after commands and monitored during heating. Configuration drift is corrected; retries preserve the original opening deadline.
-
-- **Thermal recovery.** Missing temperature data or failed calibration uses limited fallback heating rather than leaving the room off indefinitely.
-
-- **Backup heating.** Ten minute-spaced reconnection attempts precede an incident. A confirmed failure disables only the affected controller and can notify a phone and request selected backup climates at 20 °C.
-
-- **Restart recovery.** Mode, target, enabled state and compatible learned settings survive updates. Startup verifies the valve and fresh inputs before resuming; an interrupted pulse is discarded.
-
-[Operating guide and diagnostics →](docs/operation.md)
+[Controls, settings and diagnostics →](docs/operation.md)
 
 ## Installation
 
-The current adapter supports **[Sonoff TRVZB](https://www.zigbee2mqtt.io/devices/TRVZB.html) through Zigbee2MQTT**. It requires the valve's opening and closing limit entities, an external room-temperature sensor and a radiator-surface sensor. Both sensors must deliver fresh Celsius readings even when the value is unchanged.
+1. In HACS, open **Custom repositories** and add:
 
-Hardware used with this controller:
+   ```text
+   https://github.com/blackeyeliner/heating-pulse-controller-v2
+   ```
 
-- **Room temperature:** [Xiaomi LYWSD03MMC](https://www.zigbee2mqtt.io/devices/LYWSD03MMC-z.html) temperature and humidity monitors running **pvvx/ZigbeeTLc replacement firmware**, exposed in Zigbee2MQTT as `LYWSD03MMC-z`.
+   Select **Integration** as the category.
 
-- **Radiator surface temperature:** [SONOFF SNZB-02LD](https://www.zigbee2mqtt.io/devices/SNZB-02LD.html) temperature sensors with external probes attached to the radiator surface.
+2. Download **Heating Pulse Controller v2**. Enable prerelease versions if needed to see the beta.
+3. Restart Home Assistant.
+4. Open **Settings → Devices & services → Add integration** and select **Heating Pulse Controller v2**.
+5. Follow the [room setup and first-cycle guide](docs/installation.md#configure-a-room) to select sensors, check valve settings and enable control.
 
-Other temperature sensors can be used if they meet the [reporting requirements](docs/installation.md#check-temperature-reporting). The controller needs fresh readings, including repeated equal values, to distinguish a temperature plateau from a sensor that has stopped reporting.
+The integration creates a room thermostat and diagnostic entities. Add the bundled dashboard card with your thermostat's entity ID:
 
-Install through HACS as a **custom repository**, then configure and observe one radiator before adding the other rooms. [Setup instructions →](docs/installation.md)
+```yaml
+type: custom:heating-pulse-thermostat-card
+entity: climate.your_room_heating
+```
 
-## Current status
+## Recorded operation
 
-The integration is in beta. Automated tests cover the control engine, Home Assistant lifecycle, device communication and frontend behaviour. Hardware checks have also exercised calibration, ordinary pulses, restart recovery, physical controls and firmware frost handover.
+Pulses in this run begin 111–115 minutes apart, then become more frequent at 76–86 minutes apart. Later cycles start with more heat remaining in the radiator, while the room target stays unchanged.
 
-Some curves still reach the calibration timeout and remain under investigation. Recorded room temperatures and valve-open times help assess operation, but heating-water flow and delivered heat are not measured. Water, energy and cost savings have not yet been quantified. [Results and known issues →](docs/validation.md)
+[![Recorded heating cycles with increasingly frequent pulses, radiator temperature and learned thresholds, and room temperature against its target.](docs/assets/recorded-pulse-frequency.png)](docs/assets/recorded-pulse-frequency.svg)
+
+*Actual Home Assistant history, aligned by time. AC was off, the window was closed and no timeout recovery occurred. This shows pulse timing responding to room demand; the optional adaptive-cooling fraction remained unchanged. Temperature panels use different scales. Valve commands do not measure water flow.*
+
+[Field observations and the v1 comparison →](docs/validation.md#duty-cycle-comparison)
 
 ## Documentation
 
-- [Design notes](docs/design-notes.md) — constraints, decisions and changes made during use.
-- [Architecture](docs/architecture.md) — control heuristics, device communication and code layout.
-- [Installation](docs/installation.md) — hardware requirements, HACS and the first heating cycle.
-- [Operating guide](docs/operation.md) — controls, diagnostics, settings and recovery.
-- [Testing and observations](docs/validation.md) — automated checks and field results.
+- [Installation](docs/installation.md) — sensors, reporting, setup and the first cycle.
+- [Operating guide](docs/operation.md) — daily controls, settings and troubleshooting.
+- [Architecture](docs/architecture.md) — calibration, timing and device communication.
+- [Design notes](docs/design-notes.md) — why the controller works this way.
 - [Contributing](CONTRIBUTING.md) — development setup and reporting problems.
 - [Releases](https://github.com/blackeyeliner/heating-pulse-controller-v2/releases) — downloads and version history.
