@@ -30,7 +30,7 @@ Both temperature inputs must deliver fresh measurements while their values are u
 
 The room target uses hysteresis. With the default settings, a deficit greater than 0.25 °C starts a heat request; a deficit of 0.10 °C or less clears it. Between those thresholds, the previous request is retained.
 
-A heat request does not immediately open the valve. The radiator must also have cooled below its restart threshold, and ownership, input freshness and any recovery pause must permit opening.
+A heat request does not immediately open the valve. The radiator must also have cooled below its restart threshold, and ownership, input freshness, the duty limit and any recovery pause must permit opening.
 
 ## Calibration and ordinary pulses
 
@@ -55,6 +55,8 @@ The first eligible pulse, and the first after the reference has expired, is a ca
 A confirmed plateau supplies a radiator-surface reference. Before accepting it, the engine also checks that it can calculate a valid closing temperature from the trace. A rejected candidate leaves any previous valid calibration intact and schedules another attempt.
 
 The reference lasts three hours. Ordinary pulses also check for a lower plateau, allowing a cooler supply to replace an unreachable reference sooner. Hotter supply is learned through scheduled recalibration, rather than inferred from the initial slope.
+
+At the maximum opening duration, an existing plateau candidate can be accepted before its normal confirmation interval has elapsed, provided it yields a valid compensated cutoff. This closes with `plateau_at_limit`. A missing or unusable candidate closes with `maximum_open_duration` and schedules recalibration; the opening deadline is never extended.
 
 ### Calculate the closing temperature
 
@@ -82,6 +84,16 @@ With the default fraction of 0.30, a room at 22 °C and a radiator peak of 42 °
 
 Optional adaptive cooling raises this threshold within bounds when the room remains below target and is warming too slowly. The chosen threshold is fixed for that cooling episode. Demand can change immediately with the target, but the threshold is recalculated only at the next confirmed peak. [Adaptive cooling calculation](next-stage.md)
 
+### Maximum duty cycle
+
+After an ordinary or calibration pulse, including an opening-limit timeout, the controller requires a minimum closed time:
+
+```text
+minimum closed time = actual open time × (100 − duty limit) / duty limit
+```
+
+The default is 100% (no additional pause). At 50%, closed time is at least open time; at 33%, about 2.03 times; at 25%, three times. This gate is required alongside room demand and radiator cooling. Changing the limit recalculates the current pause without discarding calibration. The pause itself is not restored after restart. Window-timed heating and input-failure recovery use their own timing.
+
 ## Windows, missing data and timeouts
 
 | Situation | Behaviour |
@@ -89,7 +101,7 @@ Optional adaptive cooling raises this threshold within bounds when the room rema
 | Window opens during heating | Stop thermal learning and apply a 15-minute limit measured from the original pulse start. |
 | Window closes during heating | Restore ordinary plateau/cutoff checks without restarting the pulse. |
 | Window-timed pulse ends | Wait at least 45 minutes before another eligible pulse. |
-| Maximum opening duration reached | If a flat top is already under confirmation, accept it as the plateau and close normally (`plateau_at_limit`). Otherwise close as an ordinary pulse (`maximum_open_duration`): the restart temperature and the room's duty limit decide when it may reopen, and the next pulse recalibrates. |
+| Maximum opening duration reached | If a plateau candidate is available and produces a valid compensated cutoff, accept it and close normally (`plateau_at_limit`), even before its usual confirmation interval has elapsed. Otherwise close as an ordinary pulse (`maximum_open_duration`): the restart temperature and the room's duty limit decide when it may reopen, and the next pulse recalibrates. |
 | Temperature or other non-actuator input fails | Use bounded maintenance pulses while heat is requested. |
 | Room becomes warm enough or is switched Off | End ordinary heating. |
 

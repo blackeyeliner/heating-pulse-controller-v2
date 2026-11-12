@@ -10,7 +10,7 @@ Linux CI runs lint and formatting checks, the Python and frontend suites, and th
 
 | Area | Examples covered |
 |---|---|
-| Heating algorithm | Demand hysteresis, reference expiry, plateau detection, cutoff calculation, residual warming and adaptive cooling thresholds. |
+| Heating algorithm | Demand hysteresis, reference expiry, plateau detection, cutoff calculation, residual warming, adaptive cooling thresholds, plateau acceptance at the opening limit and duty-cycle pauses. |
 | Sensor input | Irregular timestamps, fresh equal readings, stale data, gaps and falling curves. |
 | Home Assistant | Real state events, config entries, platforms, Store persistence, reload and unload. |
 | Valve communication | Ordered commands, correlated reads, late/unrelated replies, drift correction and retry deadlines. |
@@ -38,7 +38,7 @@ Installation checks compare deployed files with the release and run the HA confi
 
 Duty cycle is commanded-open time divided by the full observation interval, including the cooling and waiting portions between pulses. It is not the valve's displayed opening percentage.
 
-The README compares a reported historical v1 average of approximately 20% with roughly 13–15% in selected regular v2 operation. The v1 baseline is an approximate historical estimate; the original detailed history is no longer available to recalculate it. A recent selected v2 sample averaged approximately 13.3%. The quoted range describes these observations, not a whole-season or all-room average.
+Recorded observations compare a reported historical v1 average of approximately 20% with roughly 13–15% in selected regular v2 operation. The v1 baseline is an approximate historical estimate; the original detailed history is no longer available to recalculate it. A recent selected v2 sample averaged approximately 13.3%. The quoted range describes these observations, not a whole-season or all-room average.
 
 The v2 analysis uses consecutive complete opening-to-opening cycles with a stable heating target, local AC off during the cycle and a preceding screening interval, and ordinary controller operation. Successful calibration pulses are included; restarts, reconnection and thermal-recovery intervals are excluded. Available window feedback is checked, but unmeasured door/window states and heat from neighbouring rooms cannot be ruled out. Higher-demand runs can have substantially greater duty.
 
@@ -48,11 +48,13 @@ Against the estimated 20% baseline, 13–15% corresponds to 5–7 percentage poi
 
 Recorded failures are used to construct focused tests. For example, a fast device response exposed a race in which a temporary MQTT listener was not ready before the request was sent. The regression test delays subscription setup and delivers an immediate response. The persistent-listener implementation must handle it without interrupting the pulse.
 
+The opening-limit regression replays a recorded trace whose flat top had not completed its normal confirmation interval. It checks acceptance as `plateau_at_limit`; a still-rising trace remains `maximum_open_duration`. Separate tests cover timeout reopening with and without a duty limit, live limit changes and preservation of the recalibration request across restart.
+
 Other tests cover unusable calibration candidates, missing reports, configuration drift and replies that arrive after a request has timed out. These tests establish how the controller handles a known condition; they do not reproduce every possible hydraulic or radio environment.
 
 ## Remaining limitations
 
-- **Some curves still reach the calibration timeout.** Nearly flat or falling traces can fail to establish a usable reference before the deadline. The controller enters bounded recovery; detector behaviour remains under investigation.
+- **Some curves still reach the calibration timeout.** An existing candidate can now be accepted at the deadline if its compensated cutoff is valid. Missing or unusable candidates still cause closure and a recalibration request. Reopening follows room demand, the cooling gate and duty limit, with no separate fixed timeout pause. Input-failure recovery remains a different path.
 - **Correct limits do not prove heat delivery.** A radiator can remain cold or begin cooling while its valve settings are confirmed open. Readback cannot identify a mechanical obstruction or a change in hot-water supply.
 - **Surface temperature is an indirect measurement.** Sensor position and airflow affect the curve. The learned reference is not a direct inlet-water temperature or stored-energy measurement.
 - **Consumption is not measured by this integration.** Valve-open time alone cannot establish litres consumed, heat output or financial savings.

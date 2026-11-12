@@ -28,6 +28,8 @@ Supply conditions vary enough that a fixed surface-temperature cutoff can become
 
 The decision combines several checks: prior temperature rise, absolute and relative slope, report timing, confirmation duration and a valid compensated cutoff. A flat cold radiator does not qualify, and an unsuitable new candidate does not erase a previous valid calibration.
 
+At the opening deadline, the controller can accept an existing plateau candidate before the full confirmation interval has elapsed, while still checking the compensated cutoff. If no usable candidate exists, it closes and retries calibration on the next eligible pulse. The cooling gate and duty limit govern reopening; the earlier fixed four-times-open timeout pause no longer applies.
+
 Calibration is due after three hours. A lower plateau can replace the reference during an ordinary pulse; hotter supply waits for scheduled recalibration. The initial slope is not used to infer supply temperature because it also depends on the radiator, sensor position and starting conditions.
 
 Pipe-mounted inlet and outlet sensors were considered, but their response during short pulses was a concern. The current implementation uses surface measurements and does not present its reference as measured water temperature.
@@ -40,7 +42,7 @@ At peak confirmation, the controller estimates the remaining deficit after allow
 
 The adjustment stays within configured bounds and below the closing threshold. It is fixed for the episode, preventing noise from moving the gate continuously. Insufficient room history falls back to the base threshold. A persistent error does not accumulate into ever more aggressive heating, and the room must still request heat when the radiator becomes ready.
 
-An open door makes this especially relevant: a room can feed heat into adjacent spaces without reaching its own target. Wind and ventilation change those losses again. Door-aware behaviour and heating budgets remain future work; the current heuristic is not a model of heat transfer between rooms.
+An open door makes this especially relevant: a room can feed heat into adjacent spaces without reaching its own target. Wind and ventilation change those losses again. A per-room maximum duty cycle can separately limit commanded-open time by adding a minimum closed interval after each pulse. Door-aware behaviour and energy budgets remain future work; the current heuristic is not a model of heat transfer between rooms.
 
 ## Physical controls and firmware protection
 

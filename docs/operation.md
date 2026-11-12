@@ -58,7 +58,7 @@ Change settings after inspecting complete heating and cooling cycles. A long pul
 | Adaptive cooling | Off | Allow a bounded earlier restart based on room deficit and progress. |
 | Initial / maximum usable lag | 120 / 300 seconds | Compensation for warming after closure. |
 | Trend window | 180 seconds | Fit the slope using actual report timestamps. |
-| Plateau confirmation | At least 60 seconds | Require sustained flattening across fresh reports. |
+| Plateau confirmation | 60 seconds | Normal confirmation interval across fresh reports; a usable candidate may be accepted earlier at the maximum opening limit. |
 | Plateau absolute / relative slope | 0.15 °C/min / 20% of maximum slope | Both limits must hold. |
 | Prior warming / rising slope | 3 °C / 0.5 °C/min | Prevent a cold flat trace from qualifying. |
 | Maximum sample gap | 120 seconds | Reject interrupted curve evidence. |
@@ -70,17 +70,19 @@ Change settings after inspecting complete heating and cooling cycles. A long pul
 
 The duty limit is an extra reopening condition next to the restart temperature, not a replacement: room demand, the cooling gate and the duty pause must all allow a new pulse. While only the duty pause blocks reopening, Phase shows `cooling` and Last decision shows `duty_limit`. Window PWM and input-failure recovery keep their own timing; an opening-limit timeout uses the duty pause. A pending duty pause is not restored after a Home Assistant restart; the restart temperature still is.
 
-When the limit arrives while a flat top is already under confirmation, that window is accepted as the plateau and Last decision shows `plateau_at_limit`; only a top that is still rising or falling counts as a timeout. Maximum opening is configurable per entry. Saved options take precedence over the software defaults. The [adaptive cooling reference](next-stage.md) gives the threshold calculation and its bounds.
+At the maximum opening limit, an existing plateau candidate can be accepted without waiting for the full confirmation interval, but its compensated cutoff must still be valid. Last decision then shows `plateau_at_limit`. A missing or rejected candidate produces `maximum_open_duration`; a flat reading alone does not guarantee acceptance. Maximum opening is configurable per entry. Saved options take precedence over the software defaults. The [adaptive cooling reference](next-stage.md) gives the threshold calculation and its bounds.
 
 For a one-time adjustment of the current restart threshold, call `heating_pulse_controller_v2.set_restart_temperature` with `config_entry_id` and `temperature`. This is allowed while not heating and without a fault. The value is saved as a manual threshold; the next confirmed peak recalculates it. It does not change the room target or force a pulse.
 
-Changing algorithm options reloads the entry and may invalidate incompatible calibration. Restored settings still require current sensor readings and valve checks before heating.
+New entries use `select.<room>_heating_pulse_controller_v2_maximum_duty_cycle`, based on the entry name. Existing registry IDs are preserved. The options form also accepts limits from 1 to 100; a custom value outside the dropdown presets has no matching dropdown selection.
+
+Changing algorithm options through the options form reloads the entry and may invalidate incompatible calibration. Restored settings still require current sensor readings and valve checks before heating.
 
 ## Recovery and emergency response
 
 ### Temperature and calibration problems
 
-Reaching the opening limit without a plateau closes the valve as an ordinary pulse with Last decision `maximum_open_duration`. There is no fixed pause: the restart temperature and the room's maximum duty cycle decide when it may reopen. At 33%, a 15-minute timeout is followed by at least 30 minutes closed; with No limit, only the restart temperature applies. The next pulse recalibrates, and that requirement survives a restart.
+Reaching the opening limit without a plateau closes the valve as an ordinary pulse with Last decision `maximum_open_duration`. There is no fixed pause: the restart temperature and the room's maximum duty cycle decide when it may reopen. At 33%, a 15-minute timeout adds about 30 minutes 27 seconds of minimum closed time; with No limit, there is no duty pause. Room demand, cooling readiness and the normal input and valve checks still apply. The next pulse recalibrates, and that requirement survives a restart.
 
 Other non-actuator input failures use bounded maintenance pulses. With a closed window, the opening limit comes from the room's configured maximum, followed by at least four times that duration closed. With an open or unknown configured window, the policy is up to 15 minutes open and at least 45 minutes closed; late closure extends the pause. Fresh room satisfaction and explicit Off still stop heating.
 
@@ -111,7 +113,7 @@ On normal shutdown or unload, the integration requests closure when it owns the 
 
 | Symptom | Check |
 |---|---|
-| Room below target but no pulse | Demand hysteresis, Phase, restart threshold, reporting freshness, automation guards and recovery timer. |
+| Room below target but no pulse | Demand hysteresis, Phase, restart threshold, reporting freshness, automation guards, duty pause and recovery timer. |
 | Last decision says `not_enabled` while control is on | Current Phase and Control enabled. The decision text can remain from an earlier action. |
 | Repeated calibration timeouts | Full temperature trace, equal-value reporting, gaps and physical warming. |
 | Reported opening but cold radiator | Limit readback and physical supply/valve behaviour. Confirmed configuration alone does not establish flow. |
